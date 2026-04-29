@@ -1,0 +1,38 @@
+services:
+  hoseo-moodiary:
+    container_name: hoseo-moodiary
+    image: hoseo-moodiary:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql-moodiary:3306/moodiary
+      - SPRING_DATASOURCE_USERNAME=dev
+      - SPRING_DATASOURCE_PASSWORD=dev123
+    networks:
+      - moodiary-network
+    depends_on:
+      mysql-moodiary:
+        condition: service_healthy
+
+  mysql-moodiary:
+    container_name: mysql-hoseo
+    image: mysql:9.3
+    environment:
+      MYSQL_ROOT_PASSWORD: 20201010
+      MYSQL_DATABASE: moodiary
+      MYSQL_USER: dev
+      MYSQL_PASSWORD: dev123
+    ports:
+      - "3309:3306"
+    networks:
+      - moodiary-network
+    healthcheck:
+      test: "mysqladmin ping -h localhost -u dev -pdev123 || exit 1"
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+networks:
+  moodiary-network:
+    driver: bridge
