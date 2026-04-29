@@ -8,6 +8,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
+
 @Service
 @RequiredArgsConstructor
 @Transactional
@@ -24,4 +26,14 @@ public class PostService {
                 .build();
     }
 
+    public List<PostResponseDto> getAllPosts() {
+        // 페이징은 나중에.
+        return repository.findAll().stream()
+                .map(post -> PostResponseDto.builder()
+                        .id(post.getId())
+                        .content(post.getContent())
+                        .title(post.getTitle())
+                        .build())
+                .toList();
+    }
 }
