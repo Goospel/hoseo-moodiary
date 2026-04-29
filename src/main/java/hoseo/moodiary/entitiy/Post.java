@@ -1,9 +1,10 @@
 package hoseo.moodiary.entitiy;
 
+import hoseo.moodiary.entitiy.base.BaseEntity;
 import jakarta.persistence.*;
 
 @Entity
-public class Post {
+public class Post extends BaseEntity {
 
     @Id
     @Column(name = "post_id")
