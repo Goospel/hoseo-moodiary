@@ -1,11 +1,12 @@
 package hoseo.moodiary.dto.request;
 
 import hoseo.moodiary.entitiy.Post;
-import lombok.Builder;
-import lombok.Getter;
+import lombok.*;
 
 @Getter
 @Builder
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+@AllArgsConstructor
 public class PostRequestDto {
 
     private String title;
