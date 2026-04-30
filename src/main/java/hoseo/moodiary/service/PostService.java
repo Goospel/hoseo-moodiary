@@ -27,7 +27,7 @@ public class PostService {
     }
 
     public List<PostResponseDto> getAllPosts() {
-        // 페이징은 나중에.
+        // todo: 페이지네이션 구현해야됨.
         return repository.findAll().stream()
                 .map(post -> PostResponseDto.builder()
                         .id(post.getId())
