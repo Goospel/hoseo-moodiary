@@ -1,7 +1,7 @@
 name: CD - Build and Push Docker Image
 
 on:
-  merge:
+  pull_request:
     branches: [main]
 
 jobs:
