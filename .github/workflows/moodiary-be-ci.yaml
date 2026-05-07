@@ -5,7 +5,7 @@ on:
     branches: [dev]
 
 jobs:
-  springboot-twitter-ci:
+  springboot-moodiary-backend-ci:
     runs-on: ubuntu-24.04
 
     steps:
