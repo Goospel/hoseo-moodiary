@@ -38,3 +38,15 @@ jobs:
 
       - name: Push Docker Image
         run: docker push ${{ secrets.DOCKER_HUB_USERNAME }}/springboot-twitter-linux:latest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/springboot-twitter-linux:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
