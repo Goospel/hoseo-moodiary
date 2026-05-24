@@ -1,6 +1,7 @@
 package hoseo.moodiary.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import hoseo.moodiary.config.SecurityConfig;
 import hoseo.moodiary.dto.request.PostRequestDto;
 import hoseo.moodiary.dto.response.PostResponseDto;
 import hoseo.moodiary.exception.PostNotFoundException;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -39,6 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 응답 직렬화·예외 매핑(GlobalExceptionHandler)만 격리 검증한다.
  */
 @WebMvcTest(PostController.class)
+@Import(SecurityConfig.class)
 class PostControllerTest {
 
     @Autowired
