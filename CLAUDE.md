@@ -39,7 +39,16 @@ docker run -d --name moodiary-mysql -p 3309:3306 \
   -e MYSQL_USER=dev -e MYSQL_PASSWORD=dev123 mysql:8
 ```
 
-Override per-developer settings by editing `src/main/resources/application.yaml` (URL/username/password lines are flagged "개인에 맞게 수정할 것").
+**Do not edit `src/main/resources/application.yaml` directly** — it's checked in and all values use `${ENV_VAR:default}` placeholders. Per-developer overrides go in `src/main/resources/application-local.yaml` (gitignored). Spring auto-merges it on top.
+
+Example `application-local.yaml`:
+```yaml
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3309/mydb_personal
+    username: my_user
+    password: my_pass
+```
 
 ### QueryDSL Q-class generation
 Q-classes are generated into `src/main/generated/` by `annotationProcessor 'com.querydsl:querydsl-apt'` during `compileJava`. `./gradlew clean` deletes that directory (configured in `build.gradle`).
@@ -77,9 +86,10 @@ hoseo.moodiary
 
 ### Database
 - Local dev: MySQL on port 3309, db `moodiary`, user `dev`/`dev123`
-- `ddl-auto: create-drop` — schema is **dropped and recreated on every restart** locally. Don't rely on local data persisting between runs.
+- `ddl-auto: update` (default in `application.yaml`) — schema is **mid-flight** during this project. Hibernate adds missing columns/tables on boot; existing data is kept. **Switch to `validate` once schema stabilizes** (around Flyway introduction, PR 6).
+  - Tradeoff: `update` doesn't reliably create indexes/constraints. If those matter, write the DDL manually and document it in the PR.
 - `show_sql: true` + `format_sql: true` — generated SQL is logged. Useful for verifying QueryDSL output.
-- Production: AWS RDS MySQL; credentials injected via `SPRING_DATASOURCE_URL` / `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` environment variables on the container.
+- Production: AWS RDS MySQL; credentials injected via `SPRING_DATASOURCE_URL` / `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` environment variables on the container. Same `ddl-auto: update` policy applies until further notice.
 
 ## CI/CD
 
@@ -100,3 +110,29 @@ To reproduce the production image locally:
 ./gradlew build -x test
 docker build -t moodiary:local .
 ```
+
+## Workflow rules (Claude reads this)
+
+These are mandatory, not suggestions.
+
+### Before creating a PR — always check PR state first
+The user merges PRs from the GitHub UI, often between Claude's tool calls. If Claude assumes a PR is still open and keeps pushing to its branch / referring to it as open, the result is wasted work and confusing messages.
+
+**Always run this before creating a new PR, or before referencing a PR number in a message:**
+```bash
+gh pr list --state all --limit 10
+```
+
+Then:
+- Is the branch you're about to PR from already merged? → branch off latest `dev` instead, don't re-push to a merged branch.
+- Is there an open PR you should be adding to rather than creating a new one? → ask the user before splitting.
+- The PR number you're about to mention — is it still open or already merged? Phrase accordingly.
+
+### Before starting any new feature/fix work — sync dev
+```bash
+git fetch origin && git checkout dev && git pull origin dev && git checkout -b <new-branch>
+```
+Local `dev` is almost always stale because the user merges remotely. Never branch off stale local `dev`.
+
+### Production-impacting changes
+Any change to: `application.yaml`, `.gitignore`, `compose.yaml`, `.github/workflows/`, DB schema, or env vars — must be flagged in the PR body with a **"운영 머지 전 필수"** checklist. Don't bury it.

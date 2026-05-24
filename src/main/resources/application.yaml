@@ -11,7 +11,12 @@
 # - SPRING_DATASOURCE_URL / SPRING_DATASOURCE_USERNAME / SPRING_DATASOURCE_PASSWORD (RDS)
 # - JWT_SECRET (Base64 32바이트 이상 랜덤. 누락 시 아래 기본값이 들어가 보안 사고)
 # - JWT_EXPIRATION_MS (선택 — 미지정 시 기본 24시간)
-# - SPRING_JPA_HIBERNATE_DDL_AUTO (운영은 validate 권장, 로컬은 create-drop)
+#
+# ddl-auto 기본값 = update (스키마 미확정 단계 정책)
+# - 엔티티에 새 필드/테이블이 추가되면 Hibernate 가 운영 RDS 에 컬럼/테이블을 추가해줌.
+# - update 는 컬럼 추가만 함. 삭제/타입변경은 안 함. 그래서 데이터 소실 위험은 없음.
+# - 단, 인덱스/제약은 보장 안 됨 → 성능/무결성에 민감한 경우는 수동 DDL 필요.
+# - 스키마가 안정화되면 SPRING_JPA_HIBERNATE_DDL_AUTO=validate 로 잠가야 함 (Flyway 도입 시점).
 
 spring:
   datasource:
@@ -25,7 +30,7 @@ spring:
         show_sql: true
         format_sql: true
     hibernate:
-      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:create-drop}
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
 
 # JWT 설정
 # - secret: HS256 서명 키. 최소 32바이트 (Base64로 약 44자) 이상이어야 jjwt가 거부하지 않는다.
