@@ -87,6 +87,7 @@ jobs:
             -e SPRING_DATASOURCE_URL=jdbc:mysql://${{ secrets.RDS_ENDPOINT}}:3306/moodiary \
             -e SPRING_DATASOURCE_USERNAME=${{ secrets.RDS_USERNAME }} \
             -e SPRING_DATASOURCE_PASSWORD=${{ secrets.RDS_PASSWORD }} \
+            -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
             ${{ secrets.DOCKER_HUB_USERNAME }}/hoseo-moodiary-linux:latest"
           ]' \
           --region "${{ secrets.AWS_REGION }}" \
