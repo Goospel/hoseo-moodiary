@@ -5,6 +5,7 @@ import hoseo.moodiary.config.SecurityConfig;
 import hoseo.moodiary.dto.request.PostRequestDto;
 import hoseo.moodiary.dto.response.PostResponseDto;
 import hoseo.moodiary.exception.PostNotFoundException;
+import hoseo.moodiary.security.JwtTokenProvider;
 import hoseo.moodiary.service.PostService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -58,6 +59,10 @@ class PostControllerTest {
 
     @MockitoBean
     private PostService postService;
+
+    /** SecurityConfig 가 JwtAuthenticationFilter 빈을 생성할 때 의존성으로 요구. 컨트롤러 테스트에서는 사용 안 함. */
+    @MockitoBean
+    private JwtTokenProvider jwtTokenProvider;
 
     @Nested
     @DisplayName("POST /post — 게시글 생성")

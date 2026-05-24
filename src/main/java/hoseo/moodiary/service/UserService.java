@@ -1,10 +1,14 @@
 package hoseo.moodiary.service;
 
+import hoseo.moodiary.dto.request.LoginRequestDto;
 import hoseo.moodiary.dto.request.UserSignupRequestDto;
+import hoseo.moodiary.dto.response.LoginResponseDto;
 import hoseo.moodiary.entitiy.User;
 import hoseo.moodiary.exception.DuplicateEmailException;
 import hoseo.moodiary.exception.DuplicateNicknameException;
+import hoseo.moodiary.exception.InvalidCredentialsException;
 import hoseo.moodiary.repository.UserJpaRepository;
+import hoseo.moodiary.security.JwtTokenProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -19,6 +23,7 @@ public class UserService {
 
     private final UserJpaRepository repository;
     private final PasswordEncoder passwordEncoder;
+    private final JwtTokenProvider jwtTokenProvider;
 
     /**
      * 회원가입.
@@ -43,5 +48,28 @@ public class UserService {
                 .build();
 
         return repository.save(user).getId();
+    }
+
+    /**
+     * 로그인 — 이메일/비밀번호 검증 후 JWT access token 발급.
+     *
+     * <p>이메일이 없든 비밀번호가 틀리든 동일하게 {@link InvalidCredentialsException}을 던진다 (열거 공격 방지).
+     * 조회만 하므로 {@code readOnly = true}.
+     */
+    @Transactional(readOnly = true)
+    public LoginResponseDto login(LoginRequestDto requestDto) {
+        User user = repository.findByEmail(requestDto.getEmail())
+                .orElseThrow(InvalidCredentialsException::new);
+
+        if (!passwordEncoder.matches(requestDto.getPassword(), user.getPassword())) {
+            throw new InvalidCredentialsException();
+        }
+
+        UUID userId = user.getId();
+        String accessToken = jwtTokenProvider.createAccessToken(userId);
+        return LoginResponseDto.builder()
+                .accessToken(accessToken)
+                .userId(userId)
+                .build();
     }
 }
