@@ -37,4 +37,9 @@ out/
 ### VS Code ###
 .vscode/
 
-/src/main/resources/application.yaml
+### Per-developer local overrides — Spring 이 application.yaml 위에 자동 merge ###
+### (application.yaml 자체는 추적된다 — secret 은 ${ENV_VAR:default} 형태로 사용) ###
+/src/main/resources/application-local.yaml
+
+### Local debug logs (server/container logs, never commit) ###
+/.local-logs/
