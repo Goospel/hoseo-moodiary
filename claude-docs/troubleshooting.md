@@ -18,6 +18,9 @@
 - [T-005](#t-005) Spring Security 의존성 추가만으로 모든 엔드포인트 401 — 슬라이스 테스트도 깨짐
 - [T-012](#t-012) SecurityConfig가 의존하는 빈이 늘면, 그걸 `@Import`하는 모든 슬라이스 테스트가 깨짐
 
+### 빌드/배포 함정
+- [T-013](#t-013) `application.yaml` 이 `.gitignore` 되어 있어 운영에 설정이 전달되지 않음
+
 ### AWS / 운영 인프라
 - [T-006](#t-006) EC2 stop/start 시 퍼블릭 IP가 매번 바뀜 → GitHub Secret 갱신 지옥
 - [T-007](#t-007) `docker-compose exec` 서비스명을 컨테이너명으로 착각
@@ -105,6 +108,21 @@
 | **해결** | SecurityConfig를 임포트하는 모든 컨트롤러 슬라이스 테스트에 `@MockitoBean private JwtTokenProvider jwtTokenProvider;` 추가. 컨트롤러 자체는 이 빈을 안 쓰지만, 컨텍스트 그래프 완성에 필요 |
 | **시점** | PR 2-c |
 | **교훈** | 보안 설정은 슬라이스 테스트의 "의존성 그래프 부담"이라는 비용이 따라온다. 새 의존 빈을 SecurityConfig에 추가할 때마다 `@Import(SecurityConfig.class)` 쓰는 테스트 전수 점검 필요. 대안: 테스트 전용 `TestSecurityConfig`를 따로 두고 임포트하는 방식 |
+
+---
+
+## 📦 빌드/배포 함정
+
+<a id="t-013"></a>
+### T-013 · `application.yaml` 이 `.gitignore` 되어 운영에 설정이 누락
+
+| | |
+|---|---|
+| **증상** | PR 2-c에서 `application.yaml` 에 추가한 `jwt.expiration-ms`, `jwt.secret` 설정이 dev 머지 후 사라진 것처럼 보임. 운영 컨테이너에서 `JwtProperties` 가 `expirationMs = 0` 으로 채워져 발급한 JWT 가 즉시 만료 |
+| **원인** | `.gitignore` 에 `/src/main/resources/application.yaml` 한 줄이 있었음. 개인 RDS 비밀번호 보호 의도였던 듯한데, 그 결과 **로컬 변경이 git 에 절대 올라가지 않음**. 운영 image 의 JAR 에는 application.yaml 자체가 없거나 옛 버전 |
+| **해결** | <br>① `.gitignore` 에서 application.yaml 줄 제거 <br>② 대신 `application-local.yaml` 만 gitignore (개인 override 용 — Spring 이 자동 merge) <br>③ 커밋된 application.yaml 의 모든 비밀값은 `${ENV_VAR:기본값}` 형식으로 — 운영은 env var override, 로컬은 기본값으로 동작 |
+| **시점** | PR 3 작업 중 발견 |
+| **교훈** | 설정 파일을 통째로 gitignore 하는 건 거의 항상 잘못된 선택. 비밀값만 env var 로 빼고 파일 자체는 추적. "기본값 + 환경별 override" 패턴이 표준. <br><br>**일반화**: 운영에 영향을 주는 파일을 gitignore 하려는 충동이 들면, 그 파일의 어떤 *값*이 비밀인지부터 분리 가능한지 먼저 의심하자 |
 
 ---
 
