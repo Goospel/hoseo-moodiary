@@ -39,7 +39,18 @@ docker run -d --name moodiary-mysql -p 3309:3306 \
   -e MYSQL_USER=dev -e MYSQL_PASSWORD=dev123 mysql:8
 ```
 
-Override per-developer settings by editing `src/main/resources/application.yaml` (URL/username/password lines are flagged "개인에 맞게 수정할 것").
+Override per-developer settings by creating `src/main/resources/application-local.yaml` (gitignored, Spring auto-merges it on top of `application.yaml`). **Do not edit `application.yaml` directly** — it's checked in and uses `${ENV_VAR:default}` placeholders.
+
+Example `application-local.yaml` for a dev who wants Hibernate to recreate schema on every restart:
+
+```yaml
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+```
+
+> **Why this matters**: `application.yaml` defaults `ddl-auto` to `validate` so production RDS schema isn't accidentally dropped. Without a local override or matching schema, `./gradlew bootRun` will fail at startup with "Schema-validation: missing table". Either run the DDLs manually on your local MySQL once, or use the override above. See T-013 in `claude-docs/troubleshooting.md` for context.
 
 ### QueryDSL Q-class generation
 Q-classes are generated into `src/main/generated/` by `annotationProcessor 'com.querydsl:querydsl-apt'` during `compileJava`. `./gradlew clean` deletes that directory (configured in `build.gradle`).
