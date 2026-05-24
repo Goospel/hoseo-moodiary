@@ -1,6 +1,8 @@
 package hoseo.moodiary.controller;
 
+import hoseo.moodiary.dto.request.LoginRequestDto;
 import hoseo.moodiary.dto.request.UserSignupRequestDto;
+import hoseo.moodiary.dto.response.LoginResponseDto;
 import hoseo.moodiary.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -32,5 +34,16 @@ public class AuthController {
     public ResponseEntity<UUID> signup(@Valid @RequestBody UserSignupRequestDto requestDto) {
         UUID userId = userService.signup(requestDto);
         return ResponseEntity.status(HttpStatus.CREATED).body(userId);
+    }
+
+    @Operation(summary = "로그인",
+            description = "이메일/비밀번호로 로그인. 성공 시 JWT access token 발급. " +
+                    "이후 보호된 엔드포인트는 'Authorization: Bearer <accessToken>' 헤더로 호출.")
+    @ApiResponse(responseCode = "200", description = "로그인 성공 — access token + userId 반환")
+    @ApiResponse(responseCode = "400", description = "이메일/비밀번호 빈 값")
+    @ApiResponse(responseCode = "401", description = "이메일 또는 비밀번호 불일치")
+    @PostMapping("/login")
+    public ResponseEntity<LoginResponseDto> login(@Valid @RequestBody LoginRequestDto requestDto) {
+        return ResponseEntity.ok(userService.login(requestDto));
     }
 }

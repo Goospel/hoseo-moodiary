@@ -1,6 +1,8 @@
 package hoseo.moodiary.config;
 
-import jakarta.servlet.http.HttpServletResponse;
+import hoseo.moodiary.security.JwtAuthenticationFilter;
+import hoseo.moodiary.security.JwtTokenProvider;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -11,25 +13,27 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 import java.nio.charset.StandardCharsets;
 
 /**
  * Spring Security 설정.
  *
- * <p><b>PR 2-b (현재 시점)</b> — 화이트리스트 외 모든 엔드포인트에 인증을 요구한다.
- * <ul>
- *   <li>{@link #WHITELIST} 외 요청은 {@code authenticated()} — 미인증이면 401 JSON 반환.</li>
- *   <li>세션은 {@link SessionCreationPolicy#STATELESS} — REST API, JWT 도입(PR 2-c) 대비.</li>
- *   <li>CSRF / formLogin / httpBasic / logout 모두 비활성.</li>
- *   <li>{@link PasswordEncoder} 빈: BCrypt.</li>
- * </ul>
+ * <p><b>PR 2-c (현재 시점)</b> — JWT 검증 필터를 추가.
+ * {@code Authorization: Bearer <token>} 헤더가 있으면 {@link JwtAuthenticationFilter}가 검증 후
+ * {@code SecurityContext}에 인증을 채운다. 토큰이 없거나 잘못되면 인증 없이 통과 →
+ * 보호된 자원이면 401로 거절.
  *
- * <p><b>주의</b> — 이 PR 머지 후에는 Post API가 401이 된다. JWT 발급(PR 2-c)이 끝나야 실제 사용자가 호출 가능.
- * 그래서 PR 2-b/2-c/3은 dev에 누적했다가 main에 한 번에 머지하는 흐름.
+ * <p>화이트리스트({@link #WHITELIST}) 외 요청은 {@code authenticated()}.
+ * 미인증 시 401 + {@code {"message":"인증이 필요합니다."}} JSON 반환.
+ *
+ * <p>{@link JwtProperties}는 {@link EnableConfigurationProperties}로 활성화 — 메인 클래스에 의존성을 두지 않아
+ * 슬라이스 테스트와의 호환성을 유지한다.
  */
 @Configuration
 @EnableWebSecurity
+@EnableConfigurationProperties(JwtProperties.class)
 public class SecurityConfig {
 
     /**
@@ -55,7 +59,14 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public JwtAuthenticationFilter jwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider) {
+        return new JwtAuthenticationFilter(jwtTokenProvider);
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                                   JwtAuthenticationFilter jwtAuthenticationFilter)
+            throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .httpBasic(httpBasic -> httpBasic.disable())
@@ -70,7 +81,8 @@ public class SecurityConfig {
                 }))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(WHITELIST).permitAll()
-                        .anyRequest().authenticated());
+                        .anyRequest().authenticated())
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 }

@@ -2,7 +2,7 @@
 
 > 작업 중 막혔던 지점, 원인, 해결법을 한 파일에 누적.
 > **규칙**: 새로 막힐 때마다 맨 위 인덱스에 한 줄 추가 → 해당 섹션에 상세 기록.
-> 마지막 갱신: 2026-05-24
+> 마지막 갱신: 2026-05-24 (PR 2-c)
 
 ---
 
@@ -16,6 +16,7 @@
 ### Spring Security + 슬라이스 테스트
 - [T-004](#t-004) `@WithMockUser`가 `@Nested` 클래스에 자동 적용되지 않음
 - [T-005](#t-005) Spring Security 의존성 추가만으로 모든 엔드포인트 401 — 슬라이스 테스트도 깨짐
+- [T-012](#t-012) SecurityConfig가 의존하는 빈이 늘면, 그걸 `@Import`하는 모든 슬라이스 테스트가 깨짐
 
 ### AWS / 운영 인프라
 - [T-006](#t-006) EC2 stop/start 시 퍼블릭 IP가 매번 바뀜 → GitHub Secret 갱신 지옥
@@ -91,6 +92,19 @@
 | **해결** | `@Configuration`에 `SecurityFilterChain` 빈을 명시적으로 정의. 인증 도입 전이라면 의도적 `permitAll()`로 시작. CSRF/formLogin/httpBasic은 REST API에선 명시적 `disable()`. 슬라이스 테스트는 `@Import(SecurityConfig.class)` 필수 (그렇지 않으면 기본 자동설정만 적용) |
 | **시점** | PR 2-a (#20) |
 | **교훈** | Spring Security는 "의존성에 넣자마자 보안 적용". 안전한 기본값이지만, 마이그레이션 중에는 SecurityFilterChain을 먼저 명시하지 않으면 모든 게 무너진다. 자동설정에 의존하지 말고 항상 빈을 정의 |
+
+---
+
+<a id="t-012"></a>
+### T-012 · SecurityConfig가 의존하는 빈이 늘면, 그걸 `@Import`하는 모든 슬라이스 테스트가 깨짐
+
+| | |
+|---|---|
+| **증상** | PR 2-c에서 SecurityConfig에 `JwtAuthenticationFilter` 빈 + `JwtTokenProvider` 파라미터를 추가했더니, `@Import(SecurityConfig.class)`로 SecurityConfig를 끌고 쓰던 모든 슬라이스 테스트가 `UnsatisfiedDependencyException: No qualifying bean of type 'JwtTokenProvider'`로 깨짐 |
+| **원인** | `@WebMvcTest`는 컴포넌트 스캔을 최소화하므로 `@Component`인 `JwtTokenProvider`가 자동 등록되지 않는다. `@Import`로 끌고 온 SecurityConfig는 그걸 필요로 하니까 충돌 |
+| **해결** | SecurityConfig를 임포트하는 모든 컨트롤러 슬라이스 테스트에 `@MockitoBean private JwtTokenProvider jwtTokenProvider;` 추가. 컨트롤러 자체는 이 빈을 안 쓰지만, 컨텍스트 그래프 완성에 필요 |
+| **시점** | PR 2-c |
+| **교훈** | 보안 설정은 슬라이스 테스트의 "의존성 그래프 부담"이라는 비용이 따라온다. 새 의존 빈을 SecurityConfig에 추가할 때마다 `@Import(SecurityConfig.class)` 쓰는 테스트 전수 점검 필요. 대안: 테스트 전용 `TestSecurityConfig`를 따로 두고 임포트하는 방식 |
 
 ---
 
