@@ -25,6 +25,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -39,6 +40,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>{@link WebMvcTest}로 PostController 한 개만 로드하고 PostService는 Mockito로 가짜로 주입한다.
  * DB·JPA·실 서비스 로직은 일절 부팅되지 않으므로 빠르고(<1s), 컨트롤러의 라우팅·요청 파싱·검증·
  * 응답 직렬화·예외 매핑(GlobalExceptionHandler)만 격리 검증한다.
+ *
+ * <p><b>인증 적용 방식</b> — Post API는 모두 {@code authenticated()} 잠금 상태이므로 각 요청에
+ * {@code .with(user("test"))}로 인증 컨텍스트를 주입한다. {@code @WithMockUser} 어노테이션을
+ * 쓰지 않는 이유는 JUnit 5의 {@code @Nested}가 별도 테스트 클래스로 취급되어 outer의 어노테이션이
+ * 자동 적용되지 않는 호환성 이슈를 피하기 위함. 요청 레벨 처리가 더 명시적이기도 하다.
  */
 @WebMvcTest(PostController.class)
 @Import(SecurityConfig.class)
@@ -60,15 +66,13 @@ class PostControllerTest {
         @Test
         @DisplayName("정상 입력이면 201과 생성된 게시글 ID(UUID)를 반환한다")
         void create_success() throws Exception {
-            // given
             UUID newId = UUID.randomUUID();
             given(postService.create(any(PostRequestDto.class))).willReturn(newId);
 
             String body = objectMapper.writeValueAsString(
                     PostRequestDto.builder().title("hello").content("first post").build());
 
-            // when & then
-            mockMvc.perform(post("/post")
+            mockMvc.perform(post("/post").with(user("test"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(body))
                     .andExpect(status().isCreated())
@@ -81,7 +85,7 @@ class PostControllerTest {
             String body = objectMapper.writeValueAsString(
                     PostRequestDto.builder().title("").content("body").build());
 
-            mockMvc.perform(post("/post")
+            mockMvc.perform(post("/post").with(user("test"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(body))
                     .andExpect(status().isBadRequest())
@@ -96,7 +100,7 @@ class PostControllerTest {
             String body = objectMapper.writeValueAsString(
                     PostRequestDto.builder().title("title").content("").build());
 
-            mockMvc.perform(post("/post")
+            mockMvc.perform(post("/post").with(user("test"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(body))
                     .andExpect(status().isBadRequest())
@@ -106,7 +110,7 @@ class PostControllerTest {
         @Test
         @DisplayName("JSON 파싱이 실패하면 400과 일반 메시지를 반환한다")
         void create_malformedJson_returns400() throws Exception {
-            mockMvc.perform(post("/post")
+            mockMvc.perform(post("/post").with(user("test"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{not-json}"))
                     .andExpect(status().isBadRequest())
@@ -123,7 +127,7 @@ class PostControllerTest {
         void findAll_empty() throws Exception {
             given(postService.getAllPosts()).willReturn(List.of());
 
-            mockMvc.perform(get("/post"))
+            mockMvc.perform(get("/post").with(user("test")))
                     .andExpect(status().isOk())
                     .andExpect(content().json("[]"));
         }
@@ -138,7 +142,7 @@ class PostControllerTest {
                     PostResponseDto.builder().id(id2).title("t2").content("c2").build()
             ));
 
-            mockMvc.perform(get("/post"))
+            mockMvc.perform(get("/post").with(user("test")))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.length()").value(2))
                     .andExpect(jsonPath("$[0].id").value(id1.toString()))
@@ -158,7 +162,7 @@ class PostControllerTest {
             given(postService.getPost(id)).willReturn(
                     PostResponseDto.builder().id(id).title("t").content("c").build());
 
-            mockMvc.perform(get("/post/{id}", id))
+            mockMvc.perform(get("/post/{id}", id).with(user("test")))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.id").value(id.toString()))
                     .andExpect(jsonPath("$.title").value("t"))
@@ -171,7 +175,7 @@ class PostControllerTest {
             UUID id = UUID.randomUUID();
             given(postService.getPost(id)).willThrow(new PostNotFoundException(id));
 
-            mockMvc.perform(get("/post/{id}", id))
+            mockMvc.perform(get("/post/{id}", id).with(user("test")))
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.message")
                             .value("게시글을 찾을 수 없습니다. id=" + id));
@@ -192,7 +196,7 @@ class PostControllerTest {
             String body = objectMapper.writeValueAsString(
                     PostRequestDto.builder().title("newT").content("newC").build());
 
-            mockMvc.perform(put("/post/{id}", id)
+            mockMvc.perform(put("/post/{id}", id).with(user("test"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(body))
                     .andExpect(status().isOk())
@@ -210,7 +214,7 @@ class PostControllerTest {
             String body = objectMapper.writeValueAsString(
                     PostRequestDto.builder().title("t").content("c").build());
 
-            mockMvc.perform(put("/post/{id}", id)
+            mockMvc.perform(put("/post/{id}", id).with(user("test"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(body))
                     .andExpect(status().isNotFound())
@@ -225,7 +229,7 @@ class PostControllerTest {
             String body = objectMapper.writeValueAsString(
                     PostRequestDto.builder().title("").content("c").build());
 
-            mockMvc.perform(put("/post/{id}", id)
+            mockMvc.perform(put("/post/{id}", id).with(user("test"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(body))
                     .andExpect(status().isBadRequest());
@@ -243,7 +247,7 @@ class PostControllerTest {
         void delete_success() throws Exception {
             UUID id = UUID.randomUUID();
 
-            mockMvc.perform(delete("/post/{id}", id))
+            mockMvc.perform(delete("/post/{id}", id).with(user("test")))
                     .andExpect(status().isNoContent());
 
             verify(postService).delete(id);
@@ -256,10 +260,55 @@ class PostControllerTest {
             willThrow(new PostNotFoundException(id))
                     .given(postService).delete(id);
 
-            mockMvc.perform(delete("/post/{id}", id))
+            mockMvc.perform(delete("/post/{id}", id).with(user("test")))
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.message")
                             .value("게시글을 찾을 수 없습니다. id=" + id));
+        }
+    }
+
+    /**
+     * SecurityFilterChain 잠금이 의도대로 동작하는지 검증.
+     * Post API 는 모두 {@code authenticated()} 상태여야 한다.
+     * 이 블록은 인증을 의도적으로 누락한다.
+     */
+    @Nested
+    @DisplayName("미인증 접근 — 401 Unauthorized")
+    class Unauthenticated {
+
+        @Test
+        @DisplayName("GET /post 는 인증 없으면 401과 표준 에러 메시지를 반환하고 서비스에 도달하지 않는다")
+        void getAll_unauthorized() throws Exception {
+            mockMvc.perform(get("/post"))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.message").value("인증이 필요합니다."));
+
+            verify(postService, never()).getAllPosts();
+        }
+
+        @Test
+        @DisplayName("POST /post 는 인증 없으면 401")
+        void create_unauthorized() throws Exception {
+            String body = objectMapper.writeValueAsString(
+                    PostRequestDto.builder().title("t").content("c").build());
+
+            mockMvc.perform(post("/post")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isUnauthorized());
+
+            verify(postService, never()).create(any());
+        }
+
+        @Test
+        @DisplayName("DELETE /post/{id} 는 인증 없으면 401")
+        void delete_unauthorized() throws Exception {
+            UUID id = UUID.randomUUID();
+
+            mockMvc.perform(delete("/post/{id}", id))
+                    .andExpect(status().isUnauthorized());
+
+            verify(postService, never()).delete(any());
         }
     }
 }
