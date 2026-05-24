@@ -6,6 +6,7 @@
 >
 > 📚 **관련 문서**:
 > - [`api-contracts.md`](./api-contracts.md) — API 상세 명세 (request/response/예시, 외부 AI 서버 계약)
+> - [`troubleshooting.md`](./troubleshooting.md) — 막혔던 지점 + 원인 + 해결 로그 (지속 누적)
 > - [Swagger UI](http://15.165.95.129:8080/swagger-ui/index.html) — 구현된 API의 실시간 진실의 원천
 
 ---
