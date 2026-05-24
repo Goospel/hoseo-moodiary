@@ -2,7 +2,11 @@
 
 > 백엔드 작업 진행 상황과 계획을 한 곳에 모은 문서.
 > **규칙**: PR이 머지될 때마다 갱신. 완료는 `[x]`로 체크, 진행 중이면 간단히 메모.
-> 마지막 갱신: 2026-05-24 (PR #16 머지 + 캘린더 기능 도메인 정보 반영)
+> 마지막 갱신: 2026-05-24 (PR #16 머지 + 캘린더 기능 도메인 정보 반영 + API 계약 문서 분리)
+>
+> 📚 **관련 문서**:
+> - [`api-contracts.md`](./api-contracts.md) — API 상세 명세 (request/response/예시, 외부 AI 서버 계약)
+> - [Swagger UI](http://15.165.95.129:8080/swagger-ui/index.html) — 구현된 API의 실시간 진실의 원천
 
 ---
 
@@ -152,61 +156,43 @@ PR 7 ECS 이전 ◄──── (먼 미래, PR 1 권장)
 
 **설계 방향**: 단순화된 비동기 (큐/메시지브로커 없이 `@Async` + DB 상태 관리)
 
-- [ ] `AiResponse` 엔티티: `id`, `post_id`, `status (PENDING/DONE/FAILED)`, `content`, **`emoji` (VARCHAR(8), 유니코드 이모지 1자)**, `error_message`, `BaseEntity`
+📋 **API 상세 명세** → [`api-contracts.md#ai-response-폴링-pr-4`](./api-contracts.md#ai-response-폴링-pr-4)
+🔌 **외부 AI 서버 계약** → [`api-contracts.md#ai-추론-서버-pr-4`](./api-contracts.md#ai-추론-서버-pr-4)
+
+**구현 체크리스트**:
+- [ ] `AiResponse` 엔티티: `id`, `post_id`, `status (PENDING/DONE/FAILED)`, `content`, `emoji` (VARCHAR(8)), `error_message`, `BaseEntity`
 - [ ] `AiResponseRepository`
 - [ ] `@EnableAsync` + `@Async` 메서드 (전용 스레드풀)
 - [ ] AI 서버 호출: `RestClient` (Spring 6 새 동기 클라이언트)
-- [ ] `POST /post` 흐름 변경:
-  1. 일기 저장
-  2. `AiResponse(status=PENDING)` 생성
-  3. `@Async`로 AI 호출 트리거
-  4. 즉시 201 반환 (`postId`)
-- [ ] `GET /post/{id}/ai-response` 폴링 엔드포인트 — 응답에 `content` + `emoji` 포함
+- [ ] `POST /post` 흐름 변경: 일기 저장 → `AiResponse(PENDING)` 생성 → `@Async`로 호출 트리거 → 즉시 201 반환
+- [ ] `GET /post/{id}/ai-response` 폴링 엔드포인트
 - [ ] 재시도/타임아웃 정책 (Spring Retry)
-- [ ] AI 응답 실패 시 처리 (status=FAILED + error_message, emoji=null)
-- [ ] DB 컬럼은 `utf8mb4` 사용 (이모지 저장 필수 — `utf8`로는 4바이트 이모지 깨짐)
+- [ ] DB 컬럼은 **`utf8mb4`** 사용 (이모지 필수)
 - [ ] 테스트: AI 서버 mock (WireMock 또는 `@MockitoBean` RestClient)
-- [ ] **AI 담당자와 API 계약 먼저 합의**:
-  - URL / 인증 / 타임아웃
-  - 요청 바디 (일기 본문)
-  - **응답 바디 — 반드시 `{"content": "...", "emoji": "😊"}` 형태 또는 동등한 명세 협의**
-  - 이모지 후보 풀 (AI가 어떤 이모지 세트를 쓰는지 — 캘린더 UI 호환 위해)
+- [ ] **선행 합의 필요** — AI 담당자와의 계약 체크리스트는 [api-contracts.md의 합의 항목](./api-contracts.md#합의-항목-체크리스트) 참조
 
-**예상 소요**: 1-2주 | **의존**: PR 3 머지 (Post에 소유자 있어야 함) | **위험**: AI 서버 다운 시 일기 작성 자체는 안 막히게 fail-safe 설계 필수, 이모지 인코딩 (utf8mb4)
+**예상 소요**: 1-2주 | **의존**: PR 3 머지 | **위험**: AI 서버 다운 시 일기 작성 자체는 안 막히게 fail-safe 설계 필수, 이모지 인코딩(utf8mb4)
 
 ---
 
 ### PR 5 — Calendar API 📅 ⭐⭐
 **Why**: 프로젝트 핵심 화면. 월별 보기로 "그 달 내가 어떤 기분이었는지" 한눈에 확인. AI가 만든 이모지를 날짜에 매핑.
 
-**API 설계** (결정 완료):
-- **엔드포인트**: `GET /calendar?year=YYYY&month=MM` (인증 필수)
-- **응답 형태**: 한 달 **전체 일자**를 배열로. 글 없는 날은 `emoji: null`
-  ```json
-  [
-    { "date": "2026-05-01", "emoji": null,  "postId": null },
-    { "date": "2026-05-02", "emoji": "😊",  "postId": "uuid-..." },
-    { "date": "2026-05-03", "emoji": "😢",  "postId": "uuid-..." },
-    ...
-    { "date": "2026-05-31", "emoji": null,  "postId": null }
-  ]
-  ```
-- **하루 여러 글**: **마지막 글(가장 최근 `created_at`)의 이모지**만 노출
+📋 **API 상세 명세** → [`api-contracts.md#calendar-pr-5`](./api-contracts.md#calendar-pr-5)
 
 **구현 체크리스트**:
 - [ ] `CalendarController` + `CalendarService`
 - [ ] `CalendarResponseDto` (date, emoji, postId)
 - [ ] Repository 쿼리: 본인 + 지정 월 → 일자별 last post 그룹핑
-  - JPQL/QueryDSL로 `GROUP BY DATE(created_at)` + `MAX(created_at)` 서브쿼리
-  - 또는 윈도우 함수 (MySQL 8+에서 가능): `ROW_NUMBER() OVER (PARTITION BY DATE(created_at) ORDER BY created_at DESC)`
-- [ ] **Post + AiResponse JOIN** — emoji 가져오기 (`status=DONE`인 응답만, 아직 PENDING이면 emoji=null)
-- [ ] 시간대 처리 — **KST 기준 일자**로 그룹핑 (UTC로 저장돼 있어도 표시는 KST). `Asia/Seoul` 명시
+  - JPQL/QueryDSL로 `GROUP BY DATE(created_at)` + `MAX(created_at)` 서브쿼리, 또는 MySQL 8+ 윈도우 함수 `ROW_NUMBER() OVER (PARTITION BY DATE(created_at) ORDER BY created_at DESC)`
+- [ ] **Post + AiResponse JOIN** — emoji 가져오기 (`status=DONE`인 응답만, PENDING/FAILED면 emoji=null)
+- [ ] 시간대 처리 — **KST(`Asia/Seoul`) 기준 일자**로 그룹핑
 - [ ] **인덱스**: `post(user_id, created_at)` 복합 인덱스 (월 단위 조회 빈번)
-- [ ] 빈 달도 31일치(또는 그 달 실제 일수)로 채워서 반환
+- [ ] 빈 달도 그 달 실제 일수만큼 채워서 반환
 - [ ] 컨트롤러 테스트: 빈 달, 일부 채워진 달, 같은 날 여러 글 → 마지막 글 emoji
-- [ ] **유효성**: `year` 범위 (예: 2020 ~ 현재년+1), `month` 1-12
+- [ ] **유효성 검증**: year 범위, month 1-12
 
-**예상 소요**: 3-5일 | **의존**: PR 3 (Post에 user_id) + PR 4 (AiResponse에 emoji 필드) | **위험**: 타임존 버그(KST/UTC 혼동), 인덱스 누락 시 월 조회가 풀스캔, MySQL의 `DATE()` 함수와 인덱스 호환성
+**예상 소요**: 3-5일 | **의존**: PR 3 (Post에 user_id) + PR 4 (AiResponse에 emoji 필드) | **위험**: 타임존 버그(KST/UTC 혼동), 인덱스 누락 시 월 조회 풀스캔, MySQL `DATE()` 함수와 인덱스 호환성
 
 ---
 
@@ -246,6 +232,8 @@ PR 7 ECS 이전 ◄──── (먼 미래, PR 1 권장)
   → FE에서 TypeScript 타입 자동 생성 (`openapi-typescript`), 클라이언트 자동 생성 (`openapi-fetch`), 또는 mock 서버(Prism)에 사용 가능
 - **Swagger UI**: http://15.165.95.129:8080/swagger-ui/index.html
   → "Try it out"으로 직접 호출 가능
+- **API 계약 문서**: [`api-contracts.md`](./api-contracts.md)
+  → 응답 포맷·예시·예정 API 명세·외부 AI 서버 계약까지. 작업 들어가기 전에 여기서 합의
 
 ### 변경 정책
 - **breaking change** 발생 시 FE 분에게 사전 공유 (Discord/Slack)
@@ -328,3 +316,4 @@ MYSQL_PWD="$RDS_PASSWORD" mysql -h "$RDS_ENDPOINT" -u "$RDS_USERNAME" moodiary
 |---|---|
 | 2026-05-24 | 이 문서 신설. PR #14/#15/#16 작업 결과 반영. 백로그 의존성 그래프·FE 협업·운영 치트시트·의사결정 로그 섹션 추가 |
 | 2026-05-24 | **캘린더 기능 도메인 정보 반영**. PR 4(AI 응답)에 `emoji` 필드 추가. 신규 PR 5 — Calendar API. 이모지 저장/하루 다중 글 처리/응답 포맷 의사결정 로그 기록. Flyway·ECS 번호 한 단계씩 밀림(PR 6, 7). |
+| 2026-05-24 | **API 계약 문서 분리** ([`api-contracts.md`](./api-contracts.md) 신설). plan.md의 PR 4/5 상세 spec을 그쪽으로 이동, 링크로 대체. 외부 AI 서버 계약도 동일 문서에서 관리. |
