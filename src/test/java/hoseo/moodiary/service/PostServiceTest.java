@@ -3,8 +3,11 @@ package hoseo.moodiary.service;
 import hoseo.moodiary.dto.request.PostRequestDto;
 import hoseo.moodiary.dto.response.PostResponseDto;
 import hoseo.moodiary.entitiy.Post;
+import hoseo.moodiary.entitiy.User;
+import hoseo.moodiary.exception.PostAccessDeniedException;
 import hoseo.moodiary.exception.PostNotFoundException;
 import hoseo.moodiary.repository.PostJpaRepository;
+import hoseo.moodiary.repository.UserJpaRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -26,41 +29,45 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
- * PostService 순수 단위 테스트.
+ * PostService 단위 테스트.
  *
- * <p>Spring 컨텍스트를 띄우지 않고({@link MockitoExtension}만 사용) Repository를 Mockito로 가짜로 주입한다.
- * 트랜잭션/JPA dirty-checking은 통합 테스트의 영역이고, 여기서는
- * <ul>
- *   <li>분기 로직 — not-found 시 {@link PostNotFoundException} 발사 여부</li>
- *   <li>도메인 메서드 호출 — {@code update}가 엔티티의 {@link Post#update} 를 거치는지(=dirty checking 전제)</li>
- *   <li>Repository 호출 사이드이펙트 — {@code delete}가 not-found에서 {@code deleteById}를 호출하지 않는지</li>
- * </ul>
- * 만 격리해서 검증한다.
+ * <p>PR 3 이후 — 모든 메서드가 현재 사용자 ID를 받는다. 본인 글이 아닌 경우 {@link PostAccessDeniedException}.
  */
 @ExtendWith(MockitoExtension.class)
 class PostServiceTest {
 
     @Mock
-    private PostJpaRepository repository;
+    private PostJpaRepository postRepository;
+
+    @Mock
+    private UserJpaRepository userRepository;
 
     @InjectMocks
     private PostService postService;
 
-    /**
-     * {@code Post.id}는 {@code @UuidGenerator}로 영속화 시점에 자동 생성되므로
-     * Mockito 환경에서는 비어 있다. 단위 테스트에서 식별자를 미리 박아두고 비교해야 할 때
-     * 리플렉션으로 강제 주입한다.
-     */
-    private static Post postWithId(UUID id, String title, String content) {
-        Post post = Post.builder().title(title).content(content).build();
+    private static final UUID OWNER_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    private static final UUID OTHER_USER_ID = UUID.fromString("00000000-0000-0000-0000-000000000002");
+
+    private static User userWithId(UUID id) {
+        User user = User.builder().email("a@b.com").password("HASHED").nickname("nick").build();
+        setId(user, "id", id);
+        return user;
+    }
+
+    private static Post postWithId(UUID postId, UUID ownerId, String title, String content) {
+        Post post = Post.builder().title(title).content(content).user(userWithId(ownerId)).build();
+        setId(post, "id", postId);
+        return post;
+    }
+
+    private static void setId(Object target, String fieldName, Object value) {
         try {
-            Field f = Post.class.getDeclaredField("id");
+            Field f = target.getClass().getDeclaredField(fieldName);
             f.setAccessible(true);
-            f.set(post, id);
+            f.set(target, value);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
-        return post;
     }
 
     @Nested
@@ -68,50 +75,47 @@ class PostServiceTest {
     class Create {
 
         @Test
-        @DisplayName("Repository에 위임하고 저장된 엔티티의 ID를 그대로 반환한다")
-        void create_returnsSavedId() {
-            UUID generatedId = UUID.randomUUID();
-            Post saved = postWithId(generatedId, "t", "c");
-            given(repository.save(any(Post.class))).willReturn(saved);
+        @DisplayName("현재 사용자를 작성자로 채워 저장하고, 생성된 ID를 반환한다")
+        void success() {
+            UUID newPostId = UUID.randomUUID();
+            given(userRepository.getReferenceById(OWNER_ID)).willReturn(userWithId(OWNER_ID));
+            given(postRepository.save(any(Post.class)))
+                    .willReturn(postWithId(newPostId, OWNER_ID, "t", "c"));
 
-            UUID result = postService.create(
+            UUID result = postService.create(OWNER_ID,
                     PostRequestDto.builder().title("t").content("c").build());
 
-            assertThat(result).isEqualTo(generatedId);
-            verify(repository).save(any(Post.class));
+            assertThat(result).isEqualTo(newPostId);
+            verify(postRepository).save(any(Post.class));
         }
     }
 
     @Nested
-    @DisplayName("getAllPosts — 전체 조회")
+    @DisplayName("getAllPosts — 본인 글 전체 조회")
     class GetAllPosts {
 
         @Test
-        @DisplayName("저장된 글이 없으면 빈 리스트를 반환한다")
+        @DisplayName("본인 게시글이 없으면 빈 리스트")
         void empty() {
-            given(repository.findAll()).willReturn(List.of());
+            given(postRepository.findAllByUser_Id(OWNER_ID)).willReturn(List.of());
 
-            List<PostResponseDto> result = postService.getAllPosts();
-
-            assertThat(result).isEmpty();
+            assertThat(postService.getAllPosts(OWNER_ID)).isEmpty();
         }
 
         @Test
-        @DisplayName("저장된 글 전부를 DTO로 매핑해 반환한다")
+        @DisplayName("본인의 글만 DTO로 매핑해 반환한다")
         void withItems() {
-            UUID id1 = UUID.randomUUID();
-            UUID id2 = UUID.randomUUID();
-            given(repository.findAll()).willReturn(List.of(
-                    postWithId(id1, "t1", "c1"),
-                    postWithId(id2, "t2", "c2")
+            UUID p1 = UUID.randomUUID();
+            UUID p2 = UUID.randomUUID();
+            given(postRepository.findAllByUser_Id(OWNER_ID)).willReturn(List.of(
+                    postWithId(p1, OWNER_ID, "t1", "c1"),
+                    postWithId(p2, OWNER_ID, "t2", "c2")
             ));
 
-            List<PostResponseDto> result = postService.getAllPosts();
+            List<PostResponseDto> result = postService.getAllPosts(OWNER_ID);
 
             assertThat(result).hasSize(2);
-            assertThat(result).extracting(PostResponseDto::getId).containsExactly(id1, id2);
-            assertThat(result).extracting(PostResponseDto::getTitle).containsExactly("t1", "t2");
-            assertThat(result).extracting(PostResponseDto::getContent).containsExactly("c1", "c2");
+            assertThat(result).extracting(PostResponseDto::getId).containsExactly(p1, p2);
         }
     }
 
@@ -120,27 +124,37 @@ class PostServiceTest {
     class GetPost {
 
         @Test
-        @DisplayName("존재하면 해당 글의 DTO를 반환한다")
-        void found() {
-            UUID id = UUID.randomUUID();
-            given(repository.findById(id)).willReturn(Optional.of(postWithId(id, "t", "c")));
+        @DisplayName("본인 글이면 DTO 를 반환한다")
+        void ownedSuccess() {
+            UUID postId = UUID.randomUUID();
+            given(postRepository.findById(postId))
+                    .willReturn(Optional.of(postWithId(postId, OWNER_ID, "t", "c")));
 
-            PostResponseDto result = postService.getPost(id);
+            PostResponseDto result = postService.getPost(OWNER_ID, postId);
 
-            assertThat(result.getId()).isEqualTo(id);
+            assertThat(result.getId()).isEqualTo(postId);
             assertThat(result.getTitle()).isEqualTo("t");
-            assertThat(result.getContent()).isEqualTo("c");
         }
 
         @Test
-        @DisplayName("존재하지 않으면 PostNotFoundException 을 던진다")
+        @DisplayName("존재하지 않으면 PostNotFoundException")
         void notFound() {
-            UUID id = UUID.randomUUID();
-            given(repository.findById(id)).willReturn(Optional.empty());
+            UUID postId = UUID.randomUUID();
+            given(postRepository.findById(postId)).willReturn(Optional.empty());
 
-            assertThatThrownBy(() -> postService.getPost(id))
-                    .isInstanceOf(PostNotFoundException.class)
-                    .hasMessageContaining(id.toString());
+            assertThatThrownBy(() -> postService.getPost(OWNER_ID, postId))
+                    .isInstanceOf(PostNotFoundException.class);
+        }
+
+        @Test
+        @DisplayName("타인 글이면 PostAccessDeniedException")
+        void notOwned() {
+            UUID postId = UUID.randomUUID();
+            given(postRepository.findById(postId))
+                    .willReturn(Optional.of(postWithId(postId, OTHER_USER_ID, "t", "c")));
+
+            assertThatThrownBy(() -> postService.getPost(OWNER_ID, postId))
+                    .isInstanceOf(PostAccessDeniedException.class);
         }
     }
 
@@ -149,38 +163,44 @@ class PostServiceTest {
     class Update {
 
         @Test
-        @DisplayName("조회한 엔티티의 update(...)를 호출해 필드를 갱신하고, 갱신된 값을 DTO로 반환한다 (dirty checking 전제)")
-        void success() {
-            UUID id = UUID.randomUUID();
-            Post existing = postWithId(id, "oldT", "oldC");
-            given(repository.findById(id)).willReturn(Optional.of(existing));
+        @DisplayName("본인 글이면 update(...) 로 필드를 갱신하고 갱신된 DTO 를 반환한다")
+        void ownedSuccess() {
+            UUID postId = UUID.randomUUID();
+            Post existing = postWithId(postId, OWNER_ID, "old", "old");
+            given(postRepository.findById(postId)).willReturn(Optional.of(existing));
 
-            PostResponseDto result = postService.update(id,
+            PostResponseDto result = postService.update(OWNER_ID, postId,
                     PostRequestDto.builder().title("newT").content("newC").build());
 
-            // 엔티티 상태가 실제로 바뀌었는지 = Post.update 가 호출됐는지의 관찰 가능한 증거
             assertThat(existing.getTitle()).isEqualTo("newT");
             assertThat(existing.getContent()).isEqualTo("newC");
-            assertThat(result.getId()).isEqualTo(id);
             assertThat(result.getTitle()).isEqualTo("newT");
-            assertThat(result.getContent()).isEqualTo("newC");
-
-            // 명시적 save 호출은 없어야 한다 (dirty checking 으로 처리되어야 함)
-            verify(repository, never()).save(any(Post.class));
+            verify(postRepository, never()).save(any(Post.class));
         }
 
         @Test
-        @DisplayName("존재하지 않으면 PostNotFoundException 을 던진다")
+        @DisplayName("존재하지 않으면 PostNotFoundException")
         void notFound() {
-            UUID id = UUID.randomUUID();
-            given(repository.findById(id)).willReturn(Optional.empty());
+            UUID postId = UUID.randomUUID();
+            given(postRepository.findById(postId)).willReturn(Optional.empty());
 
-            assertThatThrownBy(() -> postService.update(id,
+            assertThatThrownBy(() -> postService.update(OWNER_ID, postId,
                     PostRequestDto.builder().title("t").content("c").build()))
-                    .isInstanceOf(PostNotFoundException.class)
-                    .hasMessageContaining(id.toString());
+                    .isInstanceOf(PostNotFoundException.class);
+        }
 
-            verify(repository, never()).save(any(Post.class));
+        @Test
+        @DisplayName("타인 글이면 PostAccessDeniedException 을 던지고 필드를 갱신하지 않는다")
+        void notOwned() {
+            UUID postId = UUID.randomUUID();
+            Post existing = postWithId(postId, OTHER_USER_ID, "old", "old");
+            given(postRepository.findById(postId)).willReturn(Optional.of(existing));
+
+            assertThatThrownBy(() -> postService.update(OWNER_ID, postId,
+                    PostRequestDto.builder().title("newT").content("newC").build()))
+                    .isInstanceOf(PostAccessDeniedException.class);
+
+            assertThat(existing.getTitle()).isEqualTo("old");
         }
     }
 
@@ -189,27 +209,40 @@ class PostServiceTest {
     class Delete {
 
         @Test
-        @DisplayName("존재하면 deleteById 를 호출한다")
-        void success() {
-            UUID id = UUID.randomUUID();
-            given(repository.existsById(id)).willReturn(true);
+        @DisplayName("본인 글이면 delete 를 호출한다")
+        void ownedSuccess() {
+            UUID postId = UUID.randomUUID();
+            Post existing = postWithId(postId, OWNER_ID, "t", "c");
+            given(postRepository.findById(postId)).willReturn(Optional.of(existing));
 
-            postService.delete(id);
+            postService.delete(OWNER_ID, postId);
 
-            verify(repository).deleteById(id);
+            verify(postRepository).delete(existing);
         }
 
         @Test
-        @DisplayName("존재하지 않으면 PostNotFoundException 을 던지고 deleteById 는 호출하지 않는다")
+        @DisplayName("존재하지 않으면 PostNotFoundException 을 던지고 delete 미호출")
         void notFound() {
-            UUID id = UUID.randomUUID();
-            given(repository.existsById(id)).willReturn(false);
+            UUID postId = UUID.randomUUID();
+            given(postRepository.findById(postId)).willReturn(Optional.empty());
 
-            assertThatThrownBy(() -> postService.delete(id))
-                    .isInstanceOf(PostNotFoundException.class)
-                    .hasMessageContaining(id.toString());
+            assertThatThrownBy(() -> postService.delete(OWNER_ID, postId))
+                    .isInstanceOf(PostNotFoundException.class);
 
-            verify(repository, never()).deleteById(any(UUID.class));
+            verify(postRepository, never()).delete(any(Post.class));
+        }
+
+        @Test
+        @DisplayName("타인 글이면 PostAccessDeniedException 을 던지고 delete 미호출")
+        void notOwned() {
+            UUID postId = UUID.randomUUID();
+            Post existing = postWithId(postId, OTHER_USER_ID, "t", "c");
+            given(postRepository.findById(postId)).willReturn(Optional.of(existing));
+
+            assertThatThrownBy(() -> postService.delete(OWNER_ID, postId))
+                    .isInstanceOf(PostAccessDeniedException.class);
+
+            verify(postRepository, never()).delete(any(Post.class));
         }
     }
 }

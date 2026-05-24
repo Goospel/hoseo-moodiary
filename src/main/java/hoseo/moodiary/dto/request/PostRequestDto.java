@@ -1,6 +1,7 @@
 package hoseo.moodiary.dto.request;
 
 import hoseo.moodiary.entitiy.Post;
+import hoseo.moodiary.entitiy.User;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import lombok.*;
@@ -20,10 +21,11 @@ public class PostRequestDto {
     @Schema(description = "게시글 내용", example = "오늘은 기분이 좋았다.")
     private String content;
 
-    public Post toEntity() {
+    public Post toEntity(User user) {
         return Post.builder()
                 .title(title)
                 .content(content)
+                .user(user)
                 .build();
     }
 }
