@@ -38,3 +38,6 @@ out/
 .vscode/
 
 /src/main/resources/application.yaml
+
+### Local debug logs (server/container logs, never commit) ###
+/.local-logs/
