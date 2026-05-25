@@ -136,3 +136,16 @@ Local `dev` is almost always stale because the user merges remotely. Never branc
 
 ### Production-impacting changes
 Any change to: `application.yaml`, `.gitignore`, `compose.yaml`, `.github/workflows/`, DB schema, or env vars — must be flagged in the PR body with a **"운영 머지 전 필수"** checklist. Don't bury it.
+
+### Before creating any PR — troubleshooting log sweep
+For every PR Claude opens, the second-to-last task in the task list must be **"troubleshooting.md 점검"**. Walk through this checklist:
+
+1. **Re-scan the session** — every error you hit during this PR (build failures, test failures, stack traces, "wait that's weird" moments, config traps that bit you). Treat *anything you had to debug for more than a minute* as a candidate.
+2. For each candidate, ask:
+   - Is it already in `claude-docs/troubleshooting.md`? → skip.
+   - Is it project-specific (would bite the next person / next Claude on this codebase)? → **must add as a new T-### entry**.
+   - Is it generic / one-off (e.g. you mistyped a command, IDE quirk)? → skip.
+3. New entries follow the existing schema: **증상 / 원인 / 해결 / 시점 / 교훈**. Add to the index at the top and link with `<a id="t-NNN"></a>`.
+4. **Don't rely on remembering at PR-body time** — by then you've already moved on. The sweep is its own task in the task list, performed before `gh pr create`.
+
+> Why this is a hard rule: in PR #31 the `MissingServletRequestParameterException → 500` finding was captured in plan/api-contracts/PR-body but slipped through troubleshooting.md — and that's exactly the file the next Claude will grep when the same trap fires elsewhere. The fix has to land where future-Claude looks for it.
