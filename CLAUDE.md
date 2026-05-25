@@ -53,7 +53,7 @@ spring:
 ### QueryDSL Q-class generation
 Q-classes are generated into `src/main/generated/` by `annotationProcessor 'com.querydsl:querydsl-apt'` during `compileJava`. `./gradlew clean` deletes that directory (configured in `build.gradle`).
 
-> **Trap**: QueryDSL is declared as `compileOnly` (not `runtimeOnly`) because of a *"springdoc과 Spring Data 4.x 호환 문제"* — see the comment in `build.gradle`. Don't "fix" this to `runtimeOnly` without re-validating Swagger + Spring Data 4.x boot up.
+> **Note (PR #5 update)**: `querydsl-jpa` is now `implementation` (was `compileOnly`). The old `compileOnly` was a historical hand-me-down — it works fine when nothing actually uses `JPAQueryFactory`, but the moment you write the first real QueryDSL code you get `NoClassDefFoundError: com/querydsl/core/types/EntityPath` on test/runtime classpath. If you ever roll it back to `compileOnly` you must re-validate Swagger UI + Spring Data 4.x boot AND prove no QueryDSL code paths run.
 
 ## Architecture
 

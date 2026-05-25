@@ -49,8 +49,13 @@ dependencies {
 	runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
 	runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
 
-	//Querydsl 추가 (런타임 대신 compileOnly — springdoc과 Spring Data 4.x 호환 문제로 인해)
-	compileOnly 'com.querydsl:querydsl-jpa:5.0.0:jakarta'
+	// QueryDSL
+	// - 이전에는 compileOnly 였음 (역사적 사유: springdoc / Spring Data 4.x 호환성 우려).
+	//   하지만 QueryDSL을 실제로 사용하는 첫 PR(#PR5 캘린더)에서 NoClassDefFoundError 가 터졌다 —
+	//   compileOnly 면 운영 jar 와 test runtime 에 querydsl-jpa 클래스가 빠져버린다.
+	// - implementation 으로 전환: 컴파일 + 런타임 + 테스트 클래스패스 모두 포함.
+	// - 부팅/Swagger 검증은 PR 5 빌드 단계와 운영 배포 시점에서 한다.
+	implementation 'com.querydsl:querydsl-jpa:5.0.0:jakarta'
 	annotationProcessor "com.querydsl:querydsl-apt:5.0.0:jakarta"
 	annotationProcessor "jakarta.annotation:jakarta.annotation-api"
 	annotationProcessor "jakarta.persistence:jakarta.persistence-api"

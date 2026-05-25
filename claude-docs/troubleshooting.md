@@ -2,7 +2,7 @@
 
 > 작업 중 막혔던 지점, 원인, 해결법을 한 파일에 누적.
 > **규칙**: 새로 막힐 때마다 맨 위 인덱스에 한 줄 추가 → 해당 섹션에 상세 기록.
-> 마지막 갱신: 2026-05-24 (PR 1 - CD compose 통일)
+> 마지막 갱신: 2026-05-25 (PR 5 - Calendar API, QueryDSL 첫 도입)
 
 ---
 
@@ -22,6 +22,8 @@
 - [T-013](#t-013) `application.yaml` 이 `.gitignore` 되어 있어 운영에 설정이 전달되지 않음
 - [T-014](#t-014) CD 워크플로우에 시크릿 주입 라인 누락 — yaml 기본값이 운영에 노출
 - [T-015](#t-015) Claude 가 머지된 PR 을 열린 것으로 착각 → 닫힌 브랜치에 작업 계속
+- [T-016](#t-016) `compileOnly` QueryDSL — 첫 사용 PR 에서 `NoClassDefFoundError`
+- [T-017](#t-017) `MissingServletRequestParameterException` 미매핑 — 필수 파라미터 누락 시 500
 
 ### AWS / 운영 인프라
 - [T-006](#t-006) EC2 stop/start 시 퍼블릭 IP가 매번 바뀜 → GitHub Secret 갱신 지옥
@@ -149,6 +151,28 @@
 | **해결** | CLAUDE.md 에 **Workflow rules** 섹션 신설 (PR #25). 의무 규칙:<br>1. PR 만들기/언급하기 전에 항상 `gh pr list --state all --limit 10` 으로 상태 확인<br>2. 새 작업 시작 전 `git fetch origin && git checkout dev && git pull origin dev`<br>3. 운영 영향 변경은 PR body 에 "운영 머지 전 필수" 체크리스트 명시 |
 | **시점** | 이번 세션 내내 누적되다가 명문화 |
 | **교훈** | LLM 은 외부 상태 변화를 자동 감지하지 못한다 — 추측하지 말고 항상 \"확인 명령\"을 한 번 더. 사람한테는 당연하지만 Claude 한테는 명문화 안 하면 반복된다 |
+
+<a id="t-016"></a>
+### T-016 · `compileOnly` QueryDSL — 첫 사용 PR 에서 `NoClassDefFoundError`
+
+| | |
+|---|---|
+| **증상** | PR 5 (Calendar API) 에서 `JPAQueryFactory` 를 처음 실제로 사용하니 테스트에서 `java.lang.NoClassDefFoundError: com/querydsl/core/types/EntityPath` 폭발. CalendarServiceTest 9 case + cascade 로 기존 PostServiceTest / UserServiceTest 까지 `UnfinishedMockingSessionException` 으로 같이 무너짐 |
+| **원인** | `build.gradle` 에서 `compileOnly 'com.querydsl:querydsl-jpa:5.0.0:jakarta'` — 컴파일은 통과하지만 **운영 jar 와 test runtime 클래스패스에는 querydsl 클래스가 없다**. Mockito 가 `@Mock CalendarRepository` 를 mock 만들 때 클래스를 ByteBuddy 로 로드하다가 super class init 에서 터짐. 이전엔 QueryDSL 을 실제로 import 한 코드가 한 줄도 없어서 잠재된 결함이 안 드러났을 뿐 |
+| **해결** | `compileOnly` → `implementation` 으로 전환. CLAUDE.md 의 \"trap\" 주석도 같이 갱신해 다음 사람이 무심코 되돌리지 않게 함 |
+| **시점** | PR 5 |
+| **교훈** | 1) `compileOnly` 의존성은 "컴파일은 되지만 실제로 안 쓰는 라이브러리" 한정. 한 줄이라도 실제로 import 해서 런타임 객체를 만든다면 `implementation` 이 맞다.<br>2) 한 테스트 클래스의 `@Mock` 클래스 로딩 실패가 같은 JVM 의 다른 테스트 클래스까지 `UnfinishedMockingSession` 으로 전파시킨다 — 처음 보면 광범위 회귀 같지만 실은 단일 클래스가 깨진 거. 첫 NoClassDefFoundError 부터 추적해야 빨리 찾는다.<br>3) "함부로 만지지 말라" 라고 적힌 trap 도 진짜 막혔을 땐 만져야 한다 — 단 변경 사유와 재검증 절차를 trap 주석에 같이 갱신해야 다음 사람 / 다음 Claude 가 헷갈리지 않는다 |
+
+<a id="t-017"></a>
+### T-017 · `MissingServletRequestParameterException` 미매핑 — 필수 파라미터 누락 시 500
+
+| | |
+|---|---|
+| **증상** | `GET /calendar` 에 `year` 파라미터 없이 호출 → `{"message": "서버 오류가 발생했습니다."}` + HTTP 500. 사용자 쪽 입력 오류인데 서버 버그처럼 보고됨 |
+| **원인** | `GlobalExceptionHandler` 에 `MissingServletRequestParameterException` 핸들러가 없었음. fallback `@ExceptionHandler(Exception.class)` 가 잡아서 500 으로 떨어뜨렸다. 이전에는 모든 컨트롤러가 `@RequestBody` 만 쓰고 `@RequestParam` 으로 필수 쿼리 파라미터를 받는 곳이 없어서 잠재된 결함이 안 드러났을 뿐 — PR 5 의 `GET /calendar?year=&month=` 가 첫 케이스 |
+| **해결** | `@ExceptionHandler(MissingServletRequestParameterException.class)` 추가, `ResponseEntity.badRequest()` + `"필수 파라미터가 누락되었습니다: " + e.getParameterName()` 메시지 반환 (400). `api-contracts.md` 공통 규약에도 매핑 명시 |
+| **시점** | PR 5 |
+| **교훈** | 1) 새 컨트롤러 패턴(여기선 `@RequestParam` 필수)을 처음 도입할 때마다 `GlobalExceptionHandler` 의 catch-all `Exception` 핸들러가 가리고 있는 4xx 케이스가 있는지 점검해야 한다. 500 으로 떨어지는 클라이언트 오류는 디버깅 시간을 잡아먹는다.<br>2) 비슷한 후보들 — `MethodArgumentTypeMismatchException` (year=abc 같은 타입 오류), `ConstraintViolationException` (`@Validated` 적용 시), `HttpRequestMethodNotSupportedException` (잘못된 메서드). 다음에 필요해지면 같이 추가.<br>3) **테스트로 잡힌다** — Controller 테스트에 "파라미터 누락 → 400" 케이스 한 줄이 있으면 운영 전에 잡힘. 새 컨트롤러 추가할 때 입력 검증 테스트는 반드시 포함 |
 
 ---
 

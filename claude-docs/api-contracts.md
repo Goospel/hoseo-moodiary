@@ -56,6 +56,7 @@
 |---|---|---|
 | `400` | Validation 실패 (`@NotBlank` 등) | `MethodArgumentNotValidException` |
 | `400` | JSON 파싱 실패 / 형식 오류 | `HttpMessageNotReadableException` |
+| `400` | 필수 쿼리 파라미터 누락 | `MissingServletRequestParameterException` (PR 5 추가) |
 | `401` | 인증 누락/실패 | (PR 2에서 추가) |
 | `403` | 인증은 했지만 권한 없음 | (PR 3에서 추가, 본인 글 아닌데 수정/삭제 시도) |
 | `404` | 리소스 없음 | `PostNotFoundException` 등 도메인 예외 |
@@ -293,29 +294,40 @@ Content-Type: application/json
 #### `GET /calendar?year=YYYY&month=MM`
 월별 캘린더 데이터 — **그 달 전체 일자**를 배열로 반환. 글 없는 날도 `emoji: null`로 포함.
 
+> 🚧 **PR 5 구현 시점(현재)**: `emoji` 는 **항상 `null`**. `Post + AiResponse JOIN` 은 PR 4 머지 후 후속 PR 에서 추가. FE 는 `emoji == null` 이면 placeholder(회색 점 등) 로 처리.
+
 **Query**
 - `year` (int, required, 범위 2020 ~ 현재+1)
 - `month` (int, required, 1-12)
 
-**Response — 200 OK** (예: 2026-05)
+**Response — 200 OK** (예: 2026-05, **현재 시점**)
 ```json
 [
-  { "date": "2026-05-01", "emoji": null,  "postId": null },
-  { "date": "2026-05-02", "emoji": "😊", "postId": "9c4d401e-..." },
-  { "date": "2026-05-03", "emoji": "😢", "postId": "ab12cd34-..." },
+  { "date": "2026-05-01", "postId": null,                                    "emoji": null },
+  { "date": "2026-05-02", "postId": "9c4d401e-63ba-413e-abbe-a6d5cf869f0e", "emoji": null },
+  { "date": "2026-05-03", "postId": "ab12cd34-1111-2222-3333-444455556666", "emoji": null },
   ...
-  { "date": "2026-05-31", "emoji": null,  "postId": null }
+  { "date": "2026-05-31", "postId": null,                                    "emoji": null }
+]
+```
+
+**Response — 200 OK** (PR 4 + 후속 emoji JOIN 머지 후 예상)
+```json
+[
+  { "date": "2026-05-02", "postId": "9c4d401e-...", "emoji": "😊" },
+  { "date": "2026-05-03", "postId": "ab12cd34-...", "emoji": "😢" }
 ]
 ```
 
 **규칙**:
 - 응답 배열 길이 = **그 달의 실제 일수** (28/29/30/31)
-- 하루에 여러 글이 있으면 **마지막 글(`created_at` MAX)의 이모지**만 노출
-- AI 응답이 아직 `PENDING`/`FAILED`면 그 날의 `emoji: null` (postId는 채워짐)
-- 일자 그룹핑은 **KST 기준** (UTC 저장이라도 표시는 한국 날짜)
+- 하루에 여러 글이 있으면 **마지막 글(`created_at` MAX)의 postId** 만 노출
+- 일자 그룹핑은 **KST 기준** (Asia/Seoul)
+- AI 응답이 `PENDING`/`FAILED`이거나 PR 4 미구현 → `emoji: null` (postId는 채워짐)
 
 **에러**
 - `400` — 잘못된 year/month 값 (`{"message": "year는 2020 이상, month는 1-12 사이여야 합니다."}`)
+- `400` — 필수 쿼리 파라미터 누락 (`{"message": "필수 파라미터가 누락되었습니다: year"}`)
 - `401` — 인증 필요
 
 ---
@@ -380,3 +392,4 @@ Content-Type: application/json
 | 일자 | 변경 |
 |---|---|
 | 2026-05-24 | 신설. 공통 규약 / 구현된 Post CRUD 5개 / 예정 API (Auth, AI 응답 폴링, Calendar) / 외부 AI 서버 계약 명세 |
+| 2026-05-25 | PR 5 Calendar API 진행 중. `GET /calendar?year=YYYY&month=MM` 구현 — `emoji` 는 PR 4 머지 전까지 항상 null 임시 처리. 공통 규약에 `MissingServletRequestParameterException` 400 매핑 명시. |

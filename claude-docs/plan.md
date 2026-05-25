@@ -22,8 +22,8 @@
 | **운영 인프라** | EC2 (Amazon Linux 2023) + Docker + RDS MySQL 9.x |
 | **배포 방식** | `push → main` → GitHub Actions → AWS SSM → EC2 `docker run` |
 | **현재 운영에 올라간 기능** | **Post CRUD + 인증(회원가입/JWT 로그인) + Post 소유권** |
-| **dev에 있고 운영 미반영** | 없음 — release PR #27 머지 직후 깨끗한 상태 |
-| **핵심 미구현 (예정)** | **AI 비동기 응답(글 + 기분 이모지)** / **캘린더 API** |
+| **dev에 있고 운영 미반영** | (PR 5 머지 시) Calendar API — emoji=null 임시 처리 |
+| **핵심 미구현 (예정)** | **AI 비동기 응답(글 + 기분 이모지)** + 이후 캘린더 emoji LEFT JOIN |
 | **Java/Spring** | Java 25 / Spring Boot 4.0.6 |
 
 > 🛠️ **즉시 조치 필요 없음.** 인증 라인 완성 + 운영 반영까지 끝. 다음 핵심 기능(AI) 들어갈 좋은 출발선.
@@ -93,11 +93,14 @@
 
 ## 🔄 진행 중
 
-> **PR 1 — CD 워크플로우 docker compose 호출로 통일** (AI 합의 대기 중 우회 작업)
-> - `compose.yaml` 운영 표준화 (DOCKER_HUB_USERNAME 등 .env 기반)
-> - `.env.example` 신설 + `.env` gitignore 명시
-> - CD 가 docker run → `curl compose.yaml + docker compose pull/up -d` 로 전환
-> - 머지 후 EC2 .env 에 `DOCKER_HUB_USERNAME` 추가 + 재부팅 자동 기동 검증 필요
+> **PR 5 — Calendar API** (AI 합의 대기 중 우회 작업)
+> - `GET /calendar?year=YYYY&month=MM` 엔드포인트 신설
+> - QueryDSL 첫 도입 — `CalendarRepository` 가 `JPAQueryFactory` 사용
+> - 그 달 전체 일수 배열 반환 (빈 날 포함), KST 기준 일자 그룹핑, 하루 다중 글이면 마지막 글
+> - **emoji 필드는 항상 null** — PR 4 머지 후 후속 PR 에서 AiResponse LEFT JOIN 추가
+> - `build.gradle` 의 querydsl-jpa 가 `compileOnly` → `implementation` 변경 (CLAUDE.md trap 갱신)
+> - `MissingServletRequestParameterException` 핸들러 추가 (필수 파라미터 누락 → 400)
+> - 테스트 13 추가 (CalendarServiceTest 9 + CalendarControllerTest 4)
 
 ---
 
@@ -158,24 +161,28 @@ PR 7 ECS 이전 ◄──── (먼 미래, PR 1 권장)
 
 ---
 
-### PR 5 — Calendar API 📅 ⭐⭐
+### PR 5 — Calendar API 📅 ⭐⭐ (🔄 진행 중)
 **Why**: 프로젝트 핵심 화면. 월별 보기로 "그 달 내가 어떤 기분이었는지" 한눈에 확인. AI가 만든 이모지를 날짜에 매핑.
 
 📋 **API 상세 명세** → [`api-contracts.md#calendar-pr-5`](./api-contracts.md#calendar-pr-5)
 
 **구현 체크리스트**:
-- [ ] `CalendarController` + `CalendarService`
-- [ ] `CalendarResponseDto` (date, emoji, postId)
-- [ ] Repository 쿼리: 본인 + 지정 월 → 일자별 last post 그룹핑
-  - JPQL/QueryDSL로 `GROUP BY DATE(created_at)` + `MAX(created_at)` 서브쿼리, 또는 MySQL 8+ 윈도우 함수 `ROW_NUMBER() OVER (PARTITION BY DATE(created_at) ORDER BY created_at DESC)`
-- [ ] **Post + AiResponse JOIN** — emoji 가져오기 (`status=DONE`인 응답만, PENDING/FAILED면 emoji=null)
-- [ ] 시간대 처리 — **KST(`Asia/Seoul`) 기준 일자**로 그룹핑
-- [ ] **인덱스**: `post(user_id, created_at)` 복합 인덱스 (월 단위 조회 빈번)
-- [ ] 빈 달도 그 달 실제 일수만큼 채워서 반환
-- [ ] 컨트롤러 테스트: 빈 달, 일부 채워진 달, 같은 날 여러 글 → 마지막 글 emoji
-- [ ] **유효성 검증**: year 범위, month 1-12
+- [x] `CalendarController` + `CalendarService`
+- [x] `CalendarDayResponseDto` (date, emoji, postId)
+- [x] Repository 쿼리: 본인 + 지정 월 → QueryDSL 로 `BETWEEN` 조회, in-memory 일자별 그룹핑
+  - 한 달 단위 row 가 많지 않아 윈도우 함수 대신 application 그룹핑 채택
+- [ ] **Post + AiResponse JOIN** — emoji 가져오기 — **PR 4 머지 후 후속 PR**
+- [x] 시간대 처리 — KST 기준 일자 그룹핑 (`LocalDate` 변환)
+- [ ] **인덱스**: `post(user_id, created_at)` 복합 인덱스 — DDL 수동 적용 필요 (`ddl-auto: update` 가 보장 안 함)
+- [x] 빈 달도 그 달 실제 일수만큼 채워서 반환
+- [x] 컨트롤러/서비스 테스트: 빈 달, 일부 채워진 달, 같은 날 여러 글 → 마지막 글, 윤년
+- [x] **유효성 검증**: year ≥ 2020, year ≤ 현재+1, month 1-12 → `CalendarInvalidRangeException` → 400
 
-**예상 소요**: 3-5일 | **의존**: PR 4 (AiResponse 엔티티) | **위험**: 타임존 버그(KST/UTC 혼동), 인덱스 누락 시 월 조회 풀스캔
+**부수 효과**:
+- `build.gradle` querydsl-jpa: `compileOnly` → `implementation` (NoClassDefFoundError 해결)
+- `GlobalExceptionHandler` 에 `MissingServletRequestParameterException` 매핑 (400 일관화)
+
+**예상 소요**: 3-5일 | **의존**: PR 4 (AiResponse 엔티티 — emoji JOIN 한정) | **위험**: 타임존 버그(KST/UTC 혼동), 인덱스 누락 시 월 조회 풀스캔
 
 ---
 
@@ -340,4 +347,5 @@ MYSQL_PWD="$RDS_PASSWORD" mysql -h "$RDS_ENDPOINT" -u "$RDS_USERNAME" moodiary -
 | 2026-05-24 | **캘린더 기능 도메인 정보 반영**. PR 4(AI 응답)에 `emoji` 필드 추가. 신규 PR 5 — Calendar API. 이모지 저장/하루 다중 글 처리/응답 포맷 의사결정 로그 기록. Flyway·ECS 번호 한 단계씩 밀림(PR 6, 7). |
 | 2026-05-24 | **API 계약 문서 분리** ([`api-contracts.md`](./api-contracts.md) 신설). plan.md의 PR 4/5 상세 spec을 그쪽으로 이동, 링크로 대체. 외부 AI 서버 계약도 동일 문서에서 관리. |
 | 2026-05-24 | **인증 라인 완성 + 운영 반영** (release PR #27). PR 0/2-a/2-b/2-c/3 + 인프라 PR 5개 한 번에 main 머지. 백로그에서 PR 0/2/3 제거, PR 4 가 새 핵심 경로 시작점. README.md 신설 연동. |
+| 2026-05-25 | **PR 5 Calendar API 진행 중**. QueryDSL 첫 도입 → `build.gradle` querydsl-jpa compileOnly → implementation 으로 전환(CLAUDE.md trap 갱신). emoji 는 PR 4 의존이라 일단 null. `MissingServletRequestParameterException` → 400 매핑 추가. 테스트 13 cases 추가(전체 66 pass / 1 skip). |
 
