@@ -1,8 +1,15 @@
 # Moodiary Backend — 트러블슈팅 로그
 
 > 작업 중 막혔던 지점, 원인, 해결법을 한 파일에 누적.
-> **규칙**: 새로 막힐 때마다 맨 위 인덱스에 한 줄 추가 → 해당 섹션에 상세 기록.
-> 마지막 갱신: 2026-05-25 (PR 5 - Calendar API, QueryDSL 첫 도입)
+>
+> **갱신 규칙 (CLAUDE.md Workflow rules 와 연동)**:
+> - 모든 PR 의 마지막에서 두 번째 task = **"troubleshooting.md 점검"** (PR body 작성 전).
+> - 그 PR 진행 중 1분 이상 디버깅한 모든 이슈를 후보로 둔다.
+> - 프로젝트 고유 / 다음 사람도 만날 함정이면 → 새 T-### 항목 추가 (인덱스 + 본문).
+> - 단순 오타 / 개인 IDE 문제는 skip.
+> - 항목 schema: **증상 / 원인 / 해결 / 시점 / 교훈**.
+>
+> 마지막 갱신: 2026-05-25 (CLAUDE.md 압축 + sweep rule 명문화 + T-018 (T-015 재발))
 
 ---
 
@@ -24,6 +31,7 @@
 - [T-015](#t-015) Claude 가 머지된 PR 을 열린 것으로 착각 → 닫힌 브랜치에 작업 계속
 - [T-016](#t-016) `compileOnly` QueryDSL — 첫 사용 PR 에서 `NoClassDefFoundError`
 - [T-017](#t-017) `MissingServletRequestParameterException` 미매핑 — 필수 파라미터 누락 시 500
+- [T-018](#t-018) **T-015 재발** — 머지된 PR 브랜치에 추가 commit 푸시 → dead branch (Workflow rule 적용 누락)
 
 ### AWS / 운영 인프라
 - [T-006](#t-006) EC2 stop/start 시 퍼블릭 IP가 매번 바뀜 → GitHub Secret 갱신 지옥
@@ -173,6 +181,17 @@
 | **해결** | `@ExceptionHandler(MissingServletRequestParameterException.class)` 추가, `ResponseEntity.badRequest()` + `"필수 파라미터가 누락되었습니다: " + e.getParameterName()` 메시지 반환 (400). `api-contracts.md` 공통 규약에도 매핑 명시 |
 | **시점** | PR 5 |
 | **교훈** | 1) 새 컨트롤러 패턴(여기선 `@RequestParam` 필수)을 처음 도입할 때마다 `GlobalExceptionHandler` 의 catch-all `Exception` 핸들러가 가리고 있는 4xx 케이스가 있는지 점검해야 한다. 500 으로 떨어지는 클라이언트 오류는 디버깅 시간을 잡아먹는다.<br>2) 비슷한 후보들 — `MethodArgumentTypeMismatchException` (year=abc 같은 타입 오류), `ConstraintViolationException` (`@Validated` 적용 시), `HttpRequestMethodNotSupportedException` (잘못된 메서드). 다음에 필요해지면 같이 추가.<br>3) **테스트로 잡힌다** — Controller 테스트에 "파라미터 누락 → 400" 케이스 한 줄이 있으면 운영 전에 잡힘. 새 컨트롤러 추가할 때 입력 검증 테스트는 반드시 포함 |
+
+<a id="t-018"></a>
+### T-018 · **T-015 재발** — 머지된 PR 브랜치에 추가 commit 푸시 → dead branch
+
+| | |
+|---|---|
+| **증상** | PR #31(Calendar API)이 사용자에 의해 머지된 직후, Claude 가 같은 브랜치(`feat/calendar-api`)에 2 commit(`ce1f299` sweep rule 명문화, `d5f04cd` CLAUDE.md 압축)을 추가 push. 머지된 PR 에는 자동 반영되지 않으므로 두 변경은 origin 의 dead branch 에 고립 — `dev` 에는 들어가지 않음. 사용자가 발견하기 전까지 "반영됐다"는 잘못된 보고 |
+| **원인** | T-015 로 이미 기록되고 CLAUDE.md Workflow rules 에 "Before creating a PR — always check PR state first" 로 명문화되어 있었지만, 그 규칙이 **"PR 생성 직전"** 으로만 좁게 적용되고 있었다. PR 이 열려있다고 "확인한 시점" 이후의 추가 push 직전에는 다시 확인하지 않음 → PR 이 그 사이에 머지되었을 가능성을 무시 |
+| **해결** | <br>① 누락 commit 을 새 PR(`docs/claude-md-compress-and-sweep-rule`)로 부활 — dev 동기화 → 새 브랜치 → 최종 결과물 한 번에 작성 → push → PR. <br>② Workflow rule 범위 확장: "Before creating a PR" 만이 아니라 **"OR before pushing more commits to an existing branch"** 도 동일 의무. CLAUDE.md 의 규칙 헤더 자체를 다시 작성해서 "추가 push" 도 명시적 트리거로 포함 |
+| **시점** | PR #31 머지 직후 / 이 PR 에서 복구 |
+| **교훈** | 1) 규칙을 명문화했다고 끝이 아니다. **규칙의 적용 시점 범위**가 좁게 박혀버리면 같은 실수가 다른 모양으로 재발한다. T-015 는 "PR 생성 전" 만 잡았지 "추가 push 전" 은 못 잡았다.<br>2) Claude 의 상태 모델은 마지막 tool call 기준이고 외부 머지를 자동 감지하지 못한다 — push 명령은 **항상** 다음으로 시작: `gh pr list --state all --limit 10`. push 자체를 멱등하지 않은 작업으로 취급해야 한다.<br>3) 같은 실수의 재발은 단순 부주의가 아니라 **규칙의 구멍**을 가리킨다. 재발 케이스를 별도 T-### 로 기록해서 다음 Claude 가 "T-015 만 봤어요" 로 끝나지 않게 한다 |
 
 ---
 
