@@ -6,6 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -36,6 +37,12 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponseDto.builder().message(e.getMessage()).build());
     }
 
+    @ExceptionHandler(CalendarInvalidRangeException.class)
+    public ResponseEntity<ErrorResponseDto> handleCalendarInvalidRange(CalendarInvalidRangeException e) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponseDto.builder().message(e.getMessage()).build());
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponseDto> handleValidation(MethodArgumentNotValidException e) {
         String message = e.getBindingResult().getFieldErrors().stream()
@@ -50,6 +57,18 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponseDto> handleNotReadable(HttpMessageNotReadableException e) {
         return ResponseEntity.badRequest()
                 .body(ErrorResponseDto.builder().message("요청 형식이 올바르지 않습니다.").build());
+    }
+
+    /**
+     * 필수 쿼리 파라미터 누락 — 예: {@code GET /calendar} 호출 시 year/month 없음.
+     * 명시적으로 400 으로 매핑하지 않으면 fallback {@code Exception} 핸들러가 잡아 500 으로 떨어진다.
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ErrorResponseDto> handleMissingParameter(MissingServletRequestParameterException e) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponseDto.builder()
+                        .message("필수 파라미터가 누락되었습니다: " + e.getParameterName())
+                        .build());
     }
 
     @ExceptionHandler(Exception.class)

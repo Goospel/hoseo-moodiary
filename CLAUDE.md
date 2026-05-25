@@ -1,138 +1,86 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+이 파일은 Claude Code (claude.ai/code) 가 이 저장소에서 작업할 때 참조하는 가이드다.
 
-## Project Overview
+> 📚 정적 정보 (빌드 명령, 패키지 구조, CI/CD 트리거 표, GitHub Secrets) 는 대부분 **[README.md](./README.md)** 에 있다 — Claude 는 셋업 관련 디테일은 README 를 우선 참조한다. 이 파일에는 *코드를 짤 때 / 워크플로우를 돌릴 때* Claude 가 반드시 알아야 하는 것만 담는다.
 
-Moodiary is a Spring Boot 4.x REST API backend for a diary/mood tracking application. Stack: Java 25 (Amazon Corretto), Spring Data JPA + MySQL, QueryDSL for complex queries, SpringDoc OpenAPI (Swagger UI), Lombok. Deploys to AWS EC2 as a Docker container via GitHub Actions + AWS SSM.
+## 프로젝트 개요
 
-## Commands
+Moodiary 는 다이어리/무드 트래킹 애플리케이션을 위한 Spring Boot 4.x REST API 백엔드. 스택: Java 25 (Amazon Corretto), Spring Data JPA + MySQL, 복잡한 쿼리는 QueryDSL, SpringDoc OpenAPI (Swagger UI), Lombok. AWS EC2 에 Docker 컨테이너로 배포 — GitHub Actions + AWS SSM 경로.
 
-### Build & Run
-```bash
-# Build (runs tests)
-./gradlew build
+## 빠르게 보는 명령
 
-# Build without tests
-./gradlew build -x test
+- 빌드 (테스트 포함): `./gradlew build`
+- 단일 테스트 클래스: `./gradlew test --tests "<FQN>"`
+- 로컬 실행은 `localhost:3309` 의 MySQL 이 필요 (db `moodiary`, 사용자 `dev`/`dev123`). 셋업 → [README "빠른 시작"](./README.md).
+- **`src/main/resources/application.yaml` 은 절대 직접 편집하지 마라.** 새 키를 추가하려면 `${ENV_VAR:기본값}` 플레이스홀더로 적는다. 개인 오버라이드는 `src/main/resources/application-local.yaml` (gitignored, Spring 이 자동 merge) 에 넣는다.
+- **QueryDSL**: `querydsl-jpa` 는 `implementation` 이다 (`compileOnly` 아님). Q-class 는 `src/main/generated/` 로 생성된다. 이 설정을 만지기 전에 [troubleshooting T-016](./claude-docs/troubleshooting.md) 을 반드시 읽어라 — 진짜 이유가 있다.
 
-# Run locally (requires a MySQL instance reachable at localhost:3309)
-./gradlew bootRun
+## 아키텍처
 
-# Run a single test class
-./gradlew test --tests "hoseo.moodiary.MoodiaryApplicationTests"
-```
+레이어 구조: `Controller → Service → Repository → Entity`. 패키지 레이아웃은 [README "아키텍처"](./README.md) 참조.
 
-Swagger UI is served at `http://localhost:8080/swagger-ui/index.html` when the app is running.
-
-### Local Development Database
-There is no `docker-compose.yml` checked in. Bring up MySQL however you prefer; the app expects:
-
-- host/port: `localhost:3309`
-- database: `moodiary`
-- credentials: `dev` / `dev123`
-
-Quick one-liner:
-```bash
-docker run -d --name moodiary-mysql -p 3309:3306 \
-  -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=moodiary \
-  -e MYSQL_USER=dev -e MYSQL_PASSWORD=dev123 mysql:8
-```
-
-**Do not edit `src/main/resources/application.yaml` directly** — it's checked in and all values use `${ENV_VAR:default}` placeholders. Per-developer overrides go in `src/main/resources/application-local.yaml` (gitignored). Spring auto-merges it on top.
-
-Example `application-local.yaml`:
-```yaml
-spring:
-  datasource:
-    url: jdbc:mysql://localhost:3309/mydb_personal
-    username: my_user
-    password: my_pass
-```
-
-### QueryDSL Q-class generation
-Q-classes are generated into `src/main/generated/` by `annotationProcessor 'com.querydsl:querydsl-apt'` during `compileJava`. `./gradlew clean` deletes that directory (configured in `build.gradle`).
-
-> **Trap**: QueryDSL is declared as `compileOnly` (not `runtimeOnly`) because of a *"springdoc과 Spring Data 4.x 호환 문제"* — see the comment in `build.gradle`. Don't "fix" this to `runtimeOnly` without re-validating Swagger + Spring Data 4.x boot up.
-
-## Architecture
-
-### Layer Structure
-Standard Spring layered architecture: `Controller → Service → Repository → Entity`
-
-```
-hoseo.moodiary
-├── controller/     # @RestController — HTTP endpoints, returns ResponseEntity
-├── service/        # @Service @Transactional — business logic
-├── repository/     # Spring Data JPA interfaces (extend JpaRepository)
-├── entitiy/        # JPA @Entity classes  ← package name is intentionally "entitiy" (typo); keep using it
-│   └── base/       # BaseEntity — createdAt/updatedAt via JPA Auditing
-├── dto/
-│   ├── request/    # Input DTOs — include toEntity() factory method
-│   └── response/   # Output DTOs — @Builder pattern, ErrorResponseDto for error bodies
-└── exception/      # Domain exceptions + GlobalExceptionHandler (@RestControllerAdvice)
-```
-
-### Key Conventions
-- Entity primary keys use UUID (`@UuidGenerator` from Hibernate); column name = `<table>_id` (e.g. `post_id`)
-- All entities extend `BaseEntity` and inherit `createdAt` / `updatedAt`
-- `@NoArgsConstructor(access = AccessLevel.PROTECTED)` on entities; mutation goes through explicit methods (e.g. `Post.update(...)`) so updates work via dirty-checking inside `@Transactional`
-- Request DTOs expose a `toEntity()` method; Response DTOs are built inline in the service via `@Builder`
-- Read-only service methods carry `@Transactional(readOnly = true)`
-- Each domain exception (e.g. `PostNotFoundException`) gets a dedicated `@ExceptionHandler` in `GlobalExceptionHandler` that maps it to an `ErrorResponseDto { message }` with the appropriate HTTP status. Validation errors (`MethodArgumentNotValidException`) and malformed JSON (`HttpMessageNotReadableException`) are already wired there — extend that file rather than catching in controllers.
+### 코드 컨벤션 (Claude 가 반드시 내재화)
+- 레이어별 패키지: `controller / service / repository / entitiy / dto.{request,response} / exception / security / config`. `entitiy/` 는 의도된 역사적 오타다 — 고치지 말고 그대로 사용한다.
+- 엔티티 PK 는 UUID (`@UuidGenerator` — Hibernate 기본 제공); 컬럼명은 `<table>_id` (예: `post_id`).
+- 모든 엔티티는 `BaseEntity` 를 상속해서 `createdAt` / `updatedAt` 을 자동으로 받는다.
+- 엔티티에는 `@NoArgsConstructor(access = AccessLevel.PROTECTED)`; 변경은 명시적 메서드 (예: `Post.update(...)`) 를 거치게 한다. 그래야 `@Transactional` 안에서 dirty-checking 으로 업데이트가 동작한다.
+- Request DTO 는 `toEntity()` 메서드를 노출; Response DTO 는 서비스 안에서 `@Builder` 로 인라인 생성.
+- Read-only 서비스 메서드에는 `@Transactional(readOnly = true)` 를 단다.
+- 각 도메인 예외 (예: `PostNotFoundException`) 는 `GlobalExceptionHandler` 안에 전용 `@ExceptionHandler` 를 두고, `ErrorResponseDto { message }` + 적절한 HTTP 상태로 매핑한다. Validation (`MethodArgumentNotValidException`), 잘못된 JSON (`HttpMessageNotReadableException`), 필수 쿼리 파라미터 누락 (`MissingServletRequestParameterException`) 은 이미 연결되어 있다 — 컨트롤러에서 잡지 말고 이 파일을 확장하라.
 
 ### Auditing
-`@EnableJpaAuditing` lives on `MoodiaryApplication`. Disabling auditing means turning it off there; without it `BaseEntity` timestamps stop populating.
+`@EnableJpaAuditing` 은 `JpaAuditingConfig` 에 있다 (메인 클래스에 직접 달면 슬라이스 테스트가 깨진다). 이게 빠지면 `BaseEntity` 의 timestamp 가 안 채워진다.
 
-### Database
-- Local dev: MySQL on port 3309, db `moodiary`, user `dev`/`dev123`
-- `ddl-auto: update` (default in `application.yaml`) — schema is **mid-flight** during this project. Hibernate adds missing columns/tables on boot; existing data is kept. **Switch to `validate` once schema stabilizes** (around Flyway introduction, PR 6).
-  - Tradeoff: `update` doesn't reliably create indexes/constraints. If those matter, write the DDL manually and document it in the PR.
-- `show_sql: true` + `format_sql: true` — generated SQL is logged. Useful for verifying QueryDSL output.
-- Production: AWS RDS MySQL; credentials injected via `SPRING_DATASOURCE_URL` / `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` environment variables on the container. Same `ddl-auto: update` policy applies until further notice.
+### DB 정책
+- `ddl-auto: update` (application.yaml 기본값) — 스키마는 아직 확정되지 않은 단계. Hibernate 가 부팅 시 누락 컬럼/테이블을 추가하고 기존 데이터는 보존한다.
+- `update` 는 **인덱스/제약 조건의 생성을 보장하지 않는다** — 인덱스/제약이 중요한 경우 수동으로 DDL 을 작성하고 PR 에 명시한다.
+- 계획: Flyway 도입 (PR 6) 시점에 `validate` 로 전환. 그 전까지는 `ddl-auto` 를 함부로 바꾸지 마라.
 
-## CI/CD
+## CI/CD 메모
+트리거 표 + 시크릿 목록은 [README "배포"](./README.md). Claude 가 기억해야 할 한 가지: `main` 의 CD 경로 = GitHub Actions → Docker Hub → AWS SSM → EC2 `docker compose` (compose.yaml 은 저장소 루트, SSM 이 배포 시 pull 한다). compose 에 새 환경변수가 추가되면 **GitHub Secrets 와 EC2 `.env` 양쪽** 을 모두 업데이트해야 한다.
 
-| Trigger | Workflow | What it does |
-|---|---|---|
-| PR → `dev` | `moodiary-be-ci.yaml` | `./gradlew build` (runs tests) + uploads `build/reports/tests/test/` as artifact |
-| `push` → `main` | `moodiary-be-cd.yaml` | Build → push image to Docker Hub → deploy to EC2 via AWS SSM `send-command` |
+## Workflow 규칙 (Claude 가 반드시 읽는다)
 
-The CD job runs `docker build` against the repo (using `Dockerfile`, base image `amazoncorretto:25-al2023-headless`) and copies `build/libs/*.jar` into the image. On deploy, SSM runs `docker stop/rm/pull/run` on the target EC2 instance, exposing port 8080 and injecting `SPRING_DATASOURCE_*` env vars.
+이건 제안이 아니라 의무 사항이다.
 
-Required GitHub Secrets:
-- Docker Hub: `DOCKER_HUB_USERNAME`, `DOCKER_HUB_TOKEN`
-- AWS (OIDC): `AWS_GITHUB_OIDC_ROLE_ARN`, `AWS_REGION`, `EC2_INSTANCE_ID`
-- RDS: `RDS_ENDPOINT`, `RDS_USERNAME`, `RDS_PASSWORD`
+### PR 생성 전 — 또는 기존 브랜치에 추가 commit push 전 — 항상 PR 상태 확인
 
-To reproduce the production image locally:
-```bash
-./gradlew build -x test
-docker build -t moodiary:local .
-```
+사용자는 GitHub UI 에서 PR 을 머지한다. Claude 의 tool call 사이에 머지가 일어나는 경우가 많다. Claude 가 PR 이 아직 열려 있다고 가정하고 그 브랜치에 push 를 계속하거나, 메시지에서 "open" 인 것처럼 언급하면 — 헛수고 + 혼란스러운 메시지 + **머지된 PR 에 자동 반영되지 않아 `dev` 에 도달하지 못하고 dead branch 에 고립된 commit** (T-018 에서 정확히 일어난 일) 이 발생한다.
 
-## Workflow rules (Claude reads this)
+**다음 시점에 반드시 실행:**
+- 새 PR 을 만들기 직전,
+- **이미 PR 이 열려 있는 브랜치에 추가 commit 을 push 하기 직전** (그 사이에 PR 이 머지되었을 수 있다),
+- 또는 메시지에서 PR 번호를 언급하기 직전:
 
-These are mandatory, not suggestions.
-
-### Before creating a PR — always check PR state first
-The user merges PRs from the GitHub UI, often between Claude's tool calls. If Claude assumes a PR is still open and keeps pushing to its branch / referring to it as open, the result is wasted work and confusing messages.
-
-**Always run this before creating a new PR, or before referencing a PR number in a message:**
 ```bash
 gh pr list --state all --limit 10
 ```
 
-Then:
-- Is the branch you're about to PR from already merged? → branch off latest `dev` instead, don't re-push to a merged branch.
-- Is there an open PR you should be adding to rather than creating a new one? → ask the user before splitting.
-- The PR number you're about to mention — is it still open or already merged? Phrase accordingly.
+그 다음 점검:
+- PR 이 이미 머지됐는가? → **그 브랜치에 push 를 멈춰라.** `dev` 를 동기화하고, 새 브랜치를 따서 남은 작업을 별도 PR 로 연다.
+- PR 만들려는 브랜치가 이미 머지된 상태인가? → 최신 `dev` 에서 새로 브랜치 따라, 머지된 브랜치에 다시 push 하지 말고.
+- 새 PR 만들기보다 이미 열린 PR 에 합치는 게 맞는가? → 분리 전에 사용자에게 물어봐라.
+- 언급하려는 PR 번호가 아직 open 인가, 이미 머지됐는가? 표현을 그에 맞춰서 한다.
 
-### Before starting any new feature/fix work — sync dev
+### 새 feature/fix 작업 시작 전 — dev 동기화
 ```bash
 git fetch origin && git checkout dev && git pull origin dev && git checkout -b <new-branch>
 ```
-Local `dev` is almost always stale because the user merges remotely. Never branch off stale local `dev`.
+로컬 `dev` 는 거의 항상 stale 하다 — 사용자가 GitHub 에서 원격으로 머지하기 때문이다. **stale 한 로컬 `dev` 에서 절대 브랜치를 따지 마라.**
 
-### Production-impacting changes
-Any change to: `application.yaml`, `.gitignore`, `compose.yaml`, `.github/workflows/`, DB schema, or env vars — must be flagged in the PR body with a **"운영 머지 전 필수"** checklist. Don't bury it.
+### 운영 영향 변경
+`application.yaml`, `.gitignore`, `compose.yaml`, `.github/workflows/`, DB 스키마, 환경변수 — 이 중 하나라도 건드리는 변경은 PR body 에 **"운영 머지 전 필수"** 체크리스트를 박아라. 깊이 묻지 말고 눈에 띄게.
+
+### PR 생성 전 — troubleshooting 로그 sweep
+Claude 가 여는 모든 PR 의 task 리스트에서 **마지막에서 두 번째 task = "troubleshooting.md 점검"** 이다. 다음 체크리스트를 돌린다:
+
+1. **세션을 다시 훑어라** — 이 PR 진행 중 부딪힌 모든 에러 (빌드 실패, 테스트 실패, 스택 트레이스, "어 이거 왜 이러지?" 순간, 설정 trap). *1분 이상 디버깅한 모든 것* 을 후보로 둔다.
+2. 각 후보에 대해 물어라:
+   - `claude-docs/troubleshooting.md` 에 이미 있는가? → skip.
+   - 프로젝트 고유 (다음 사람 / 다음 Claude 도 똑같이 만날) 함정인가? → **반드시 새 T-### 항목 추가.**
+   - 일반적이거나 일회성 (예: 명령어 오타, IDE 특이사항) 인가? → skip.
+3. 새 항목은 기존 schema 를 따른다: **증상 / 원인 / 해결 / 시점 / 교훈**. 상단 인덱스에도 한 줄 추가하고 `<a id="t-NNN"></a>` 로 링크.
+4. **PR body 작성 시점에 떠올리려고 하지 마라** — 그때는 이미 다른 데로 옮겨갔다. sweep 자체를 task 리스트에 명시적인 task 로 박아두고, `gh pr create` 전에 끝낸다.
+
+> 이 규칙이 절대적인 이유: PR #31 에서 `MissingServletRequestParameterException → 500` 발견이 plan / api-contracts / PR body 에는 적혔지만 troubleshooting.md 에는 빠졌다 — 그런데 그곳이 정확히 미래의 Claude 가 같은 trap 이 다시 터질 때 grep 으로 찾는 위치다. 수정은 미래의 Claude 가 찾을 곳에 정확히 박혀 있어야 한다.
