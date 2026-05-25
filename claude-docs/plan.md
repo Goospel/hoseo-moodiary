@@ -23,7 +23,7 @@
 | **배포 방식** | `push → main` → GitHub Actions → AWS SSM → EC2 `docker run` |
 | **현재 운영에 올라간 기능** | **Post CRUD + 인증(회원가입/JWT 로그인) + Post 소유권** |
 | **dev에 있고 운영 미반영** | (PR 5 머지 시) Calendar API — emoji=null 임시 처리 |
-| **핵심 미구현 (예정)** | **AI 비동기 응답(글 + 기분 이모지)** + 이후 캘린더 emoji LEFT JOIN |
+| **핵심 미구현 (예정)** | **AI 비동기 응답** / **프론트엔드 S3 배포 + 통합** / 캘린더 emoji LEFT JOIN / Flyway |
 | **Java/Spring** | Java 25 / Spring Boot 4.0.6 |
 
 > 🛠️ **즉시 조치 필요 없음.** 인증 라인 완성 + 운영 반영까지 끝. 다음 핵심 기능(AI) 들어갈 좋은 출발선.
@@ -107,35 +107,21 @@
 ## 📋 백로그 (우선순위 + 의존성)
 
 ```
-PR 1 CD를 compose로 통일   (독립적, 운영 안정성)
+PR 8 프론트 S3 배포 + CORS   (독립적, 데모 가시성 ⭐⭐⭐)
+                              ↑ BE 담당자가 프론트 CD 까지 직접 세팅
 
-PR 4 AI 비동기 응답 ──► PR 5 Calendar API
-(글 + 이모지)
+PR 4 AI 비동기 응답           (AI 담당자 합의 필요 ⭐⭐⭐)
+    └─► 캘린더 emoji LEFT JOIN 후속 PR (PR 5-후속)
 
-PR 6 Flyway              (PR 4 의 AiResponse 스키마와 같이 도입 권장)
+PR 6 Flyway                  (PR 4 의 AiResponse 스키마와 같이 도입 권장)
 
-PR 7 ECS 이전 ◄──── (먼 미래, PR 1 권장)
+PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연스러움)
 ```
 
-> **다음 핵심 경로**: PR 4 → PR 5 가 졸업 데모 핵심. 캘린더가 메인 화면.
-
-### PR 1 — CD를 docker compose 호출로 통일 🔧 ⭐⭐⭐
-**Why**: 현재 CD는 `docker run`을 직접 호출해 EC2의 `compose.yaml`을 무시한다. 결과적으로:
-- `restart: unless-stopped` 빠짐 → **EC2 재부팅 시 컨테이너 자동 기동 X**
-- `pull_policy: always` 빠짐
-- manual compose와 CD가 서로 모르게 부딪힘
-- 새 시크릿(예: PR 4의 AI 서버 URL/키) 추가할 때마다 워크플로우 yaml 수정 필요 — **현재 구조의 누적 비용**
-
-- [ ] EC2의 `compose.yaml`을 repo에 `docker-compose.yml`로 커밋
-- [ ] `.env.example` 추가 (RDS_ENDPOINT 등 키만, 값 빈칸)
-- [ ] `.env`는 `.gitignore`에 명시
-- [ ] CD 워크플로우 수정: SSM 명령을 `cd /home/ec2-user && docker compose pull && docker compose up -d`로 변경
-- [ ] 첫 배포 전 EC2에 `.env` 존재 + repo 최신 동기화 확인 (수동 1회)
-- [ ] PR 머지 후 인스턴스 재부팅으로 자동 기동 검증
-
-**예상 소요**: 1-2시간 | **의존**: 없음 | **위험**: 첫 배포 시 `.env` 없으면 컨테이너 실패
-
----
+> **다음 핵심 경로**: **PR 8 → PR 4 → (PR 5 후속 emoji JOIN)**.
+> - **PR 8** 이 가시성 우선 — 졸업 발표에 "프론트가 떴고 백엔드와 통신" 까지 필수.
+> - **PR 4** 는 차별 기능 (AI 응답 + 이모지). AI 담당자 답변 대기 중이면 PR 8 부터 진행.
+> - **PR 6** 은 스키마 안정화 후 (PR 4 머지 시점) 같이.
 
 ### PR 4 — 비동기 AI 응답 모듈 (글 + 기분 이모지) 🤖 ⭐⭐⭐
 **Why**: 프로젝트 핵심 차별 기능. 일기 → AI가 **응답 텍스트 + 기분 이모지** 둘 다 생성. 이모지는 PR 5 캘린더에서 사용됨.
@@ -212,6 +198,79 @@ PR 7 ECS 이전 ◄──── (먼 미래, PR 1 권장)
 
 ---
 
+### PR 8 — 프론트엔드 S3 정적 배포 + CORS 통합 🌐 ⭐⭐⭐
+**Why**: 졸업 발표 = "프론트가 떴고 백엔드와 통신해서 일기 작성 / 캘린더 확인 가능" 까지 가야 의미 있는 데모. 현재는 Swagger UI 만으로 발표하는데 시각적 인상 약함.
+
+**설계 결정** (이번 PR 의 의사결정 — [의사결정 로그](#-의사결정-로그) 참조):
+- 호스팅: **S3 정적 웹사이트만**. CloudFront / 도메인 / HTTPS 생략. 둘 다 HTTP 라 mixed content 문제 없음.
+- 프론트 CD: **BE 담당자가 프론트 레포에 직접 GitHub Actions 세팅**. FE 담당자는 코드만. 졸업 데모 분업 패턴.
+- 도메인: X — S3 endpoint URL 그대로 사용.
+
+**왜 이 수준에서 멈추는가**:
+- CloudFront / HTTPS / 도메인까지 가면 백엔드도 HTTPS 가 되어야 (mixed content 방지) → ALB + ACM + 도메인 작업 연쇄 → 범위가 PR 7 (ECS) 급으로 커짐.
+- 둘 다 HTTP 면 일관됨. 졸업 발표 후 운영 안정화 단계에 업그레이드 옵션으로 둔다.
+
+---
+
+**BE 레포(이 레포)의 일** — 사실상 CORS 한 클래스가 전부:
+- [ ] `WebMvcConfigurer` 기반 CORS 설정 클래스 — allowed origins:
+  - S3 endpoint URL (예: `http://moodiary-frontend.s3-website.ap-northeast-2.amazonaws.com`)
+  - 로컬 dev (`http://localhost:3000`, `http://localhost:5173` 등 — FE 빌드 도구에 따라)
+- [ ] (선택) `application.yaml` 에 `app.cors.allowed-origins` 외부화 — env var override 가능하게
+- [ ] `SecurityFilterChain` 에 `.cors(Customizer.withDefaults())` 활성화
+- [ ] (선택) `application.yaml` 의 `springdoc.servers` 에 운영 URL 명시 — Swagger UI 에서 직접 호출 시 운영 서버 선택 가능
+- [ ] CORS preflight (OPTIONS) 단위 테스트 — Origin 헤더 시뮬레이션해서 `Access-Control-Allow-Origin` 응답 확인
+
+---
+
+**인프라 셋업** (BE 담당자가 AWS 콘솔 + CLI 로 1회):
+- [ ] S3 버킷 생성 — 예: `moodiary-frontend`, region `ap-northeast-2`
+- [ ] Static Website Hosting 활성화 → `*.s3-website.ap-northeast-2.amazonaws.com` endpoint URL 받기
+- [ ] 버킷 정책 — Public Read (정적 사이트라 의도된 공개. `s3:GetObject` 만 `*` 에 허용)
+- [ ] 프론트 레포에 GitHub OIDC role 부착 — S3 sync 권한만 (기존 백엔드 OIDC 패턴 재사용)
+
+---
+
+**프론트 레포 작업** (BE 담당자가 직접 — FE 담당자는 코드만):
+- [ ] 프론트 코드의 API base URL env 합의 — 예: `VITE_API_URL=http://15.165.95.129:8080` (Vite 기준). FE 담당자에게 확인 필요.
+- [ ] `.github/workflows/frontend-cd.yaml` 작성:
+  ```yaml
+  # 대략적 흐름
+  - npm ci
+  - npm run build           # → dist/ 또는 build/ 산출
+  - aws configure ... OIDC
+  - aws s3 sync ./dist s3://moodiary-frontend/ --delete
+  ```
+- [ ] 빌드 산출 디렉토리 확인 (Vite=`dist/`, CRA=`build/`, Next.js static export=`out/`)
+
+---
+
+**통합 검증** (인프라 + BE + 프론트 다 완성 후):
+- [ ] S3 endpoint URL 접속 → 프론트 UI 로딩
+- [ ] 회원가입 → 로그인 → JWT 발급 → localStorage 저장 정상
+- [ ] 이후 fetch 에 `Authorization: Bearer <token>` 자동 첨부
+- [ ] 일기 CRUD → 본인 글만 조회/수정/삭제 정상 (소유권 격리 확인)
+- [ ] 캘린더 조회 → 일자별 postId 매핑 정상 (emoji 는 PR 4 후 후속)
+- [ ] CORS preflight (OPTIONS) 가 200 으로 떨어지고 실제 요청 정상
+
+---
+
+**예상 소요**: BE CORS 작업 **0.5일** + 인프라 + 프론트 CD **1-2일** + 통합 검증 **0.5일** = **총 2-3일**
+
+**의존**: 없음 (인증 + Post + 캘린더 다 완성, 프론트 통합만 남음)
+
+**위험**:
+- 프론트 레포의 빌드 명령/산출 디렉토리/env 패턴 미합의 — FE 담당자와 사전 확인 필수
+- CORS origin 오타로 차단 — 테스트와 통합 검증으로 잡음
+- BE 담당자가 프론트 코드 구조 미숙지 시 CD 디버깅 어려움 — FE 담당자와 페어 작업 권장
+- S3 버킷 Public Read 설정 시 AWS Block Public Access 기본값 끄는 작업 필요 — 콘솔에서 헷갈리기 쉬움
+
+**운영 머지 전 필수**:
+- [ ] CORS allowed origins 환경변수 → EC2 `.env` 갱신 (외부화 옵션 적용 시)
+- [ ] S3 버킷 endpoint URL 변경 시 GitHub Secret + EC2 `.env` 동시 갱신
+
+---
+
 ## 🤝 FE 협업
 
 ### 현재 노출된 API (PR #27 release 이후)
@@ -246,6 +305,12 @@ fetch('/post', {
   → "Try it out"으로 직접 호출 가능
 - **API 계약 문서**: [`api-contracts.md`](./api-contracts.md)
   → 응답 포맷·예시·예정 API 명세·외부 AI 서버 계약까지
+
+### 배포 (PR 8 머지 후 예정)
+- **프론트 운영 URL**: S3 endpoint (예: `http://moodiary-frontend.s3-website.ap-northeast-2.amazonaws.com`) — 머지 후 갱신
+- **CD**: 프론트 레포 push → GitHub Actions → `aws s3 sync ./dist s3://moodiary-frontend/ --delete` (FE 담당자는 빌드만 신경, CD 는 BE 담당자가 세팅)
+- **API URL 환경변수**: 프론트 빌드 시점에 `VITE_API_URL=http://15.165.95.129:8080` 같은 env 로 박힘. BE URL 바뀌면 프론트 재빌드 필요
+- **CORS**: 백엔드가 S3 endpoint + 로컬 dev origins 만 허용. 프론트가 새 도메인 사용 시 BE `application.yaml` 의 `app.cors.allowed-origins` 갱신 필요
 
 ### 변경 정책
 - **breaking change** 발생 시 FE 분에게 사전 공유 (Discord/Slack)
@@ -336,6 +401,9 @@ MYSQL_PWD="$RDS_PASSWORD" mysql -h "$RDS_ENDPOINT" -u "$RDS_USERNAME" moodiary -
 | **하루 여러 글이면 캘린더는 마지막 글의 이모지** | 구현 가장 단순 | 이전 세션 |
 | **캘린더 API는 한 달 전체(31일) 반환** | 빈 날도 `emoji: null`. FE 부담 감소 | 이전 세션 |
 | 캘린더 응답 emoji = **Post + AiResponse JOIN** | denormalize 필요 시점에 재검토 | 이전 세션 |
+| **프론트 호스팅 = S3 정적 웹사이트만** | CloudFront/HTTPS/도메인 가면 BE도 HTTPS 작업 연쇄 → 졸업 데모 범위 초과. 둘 다 HTTP 일관성 | PR 8 |
+| **프론트 도메인 X** | S3 endpoint URL 그대로. 월 0원, 데모에 명함 필요 X | PR 8 |
+| **프론트 CD = BE 담당자가 직접** | FE 담당자 CI/CD 학습 부담 흡수. 한 번 세팅하면 자동. 졸업 데모 분업 패턴 | PR 8 |
 
 ---
 
@@ -348,4 +416,5 @@ MYSQL_PWD="$RDS_PASSWORD" mysql -h "$RDS_ENDPOINT" -u "$RDS_USERNAME" moodiary -
 | 2026-05-24 | **API 계약 문서 분리** ([`api-contracts.md`](./api-contracts.md) 신설). plan.md의 PR 4/5 상세 spec을 그쪽으로 이동, 링크로 대체. 외부 AI 서버 계약도 동일 문서에서 관리. |
 | 2026-05-24 | **인증 라인 완성 + 운영 반영** (release PR #27). PR 0/2-a/2-b/2-c/3 + 인프라 PR 5개 한 번에 main 머지. 백로그에서 PR 0/2/3 제거, PR 4 가 새 핵심 경로 시작점. README.md 신설 연동. |
 | 2026-05-25 | **PR 5 Calendar API 진행 중**. QueryDSL 첫 도입 → `build.gradle` querydsl-jpa compileOnly → implementation 으로 전환(CLAUDE.md trap 갱신). emoji 는 PR 4 의존이라 일단 null. `MissingServletRequestParameterException` → 400 매핑 추가. 테스트 13 cases 추가(전체 66 pass / 1 skip). |
+| 2026-05-25 | **PR 8 (프론트 S3 배포 + CORS) 신설**. 졸업 데모 가시성 확보를 새 핵심 경로로. S3 only / 도메인 X / 프론트 CD 는 BE 담당자가 직접 세팅. 백로그 그래프 갱신 — PR 8 → PR 4 → (PR 5 후속 emoji JOIN). |
 
