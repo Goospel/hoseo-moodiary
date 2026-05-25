@@ -2,114 +2,43 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> 📚 Most static info (build commands, package structure, CI/CD trigger table, GitHub Secrets) lives in **[README.md](./README.md)** — Claude defaults there for setup details. This file captures only what Claude needs while *writing code and operating workflow*.
+
 ## Project Overview
 
 Moodiary is a Spring Boot 4.x REST API backend for a diary/mood tracking application. Stack: Java 25 (Amazon Corretto), Spring Data JPA + MySQL, QueryDSL for complex queries, SpringDoc OpenAPI (Swagger UI), Lombok. Deploys to AWS EC2 as a Docker container via GitHub Actions + AWS SSM.
 
-## Commands
+## Commands at a glance
 
-### Build & Run
-```bash
-# Build (runs tests)
-./gradlew build
-
-# Build without tests
-./gradlew build -x test
-
-# Run locally (requires a MySQL instance reachable at localhost:3309)
-./gradlew bootRun
-
-# Run a single test class
-./gradlew test --tests "hoseo.moodiary.MoodiaryApplicationTests"
-```
-
-Swagger UI is served at `http://localhost:8080/swagger-ui/index.html` when the app is running.
-
-### Local Development Database
-There is no `docker-compose.yml` checked in. Bring up MySQL however you prefer; the app expects:
-
-- host/port: `localhost:3309`
-- database: `moodiary`
-- credentials: `dev` / `dev123`
-
-Quick one-liner:
-```bash
-docker run -d --name moodiary-mysql -p 3309:3306 \
-  -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=moodiary \
-  -e MYSQL_USER=dev -e MYSQL_PASSWORD=dev123 mysql:8
-```
-
-**Do not edit `src/main/resources/application.yaml` directly** — it's checked in and all values use `${ENV_VAR:default}` placeholders. Per-developer overrides go in `src/main/resources/application-local.yaml` (gitignored). Spring auto-merges it on top.
-
-Example `application-local.yaml`:
-```yaml
-spring:
-  datasource:
-    url: jdbc:mysql://localhost:3309/mydb_personal
-    username: my_user
-    password: my_pass
-```
-
-### QueryDSL Q-class generation
-Q-classes are generated into `src/main/generated/` by `annotationProcessor 'com.querydsl:querydsl-apt'` during `compileJava`. `./gradlew clean` deletes that directory (configured in `build.gradle`).
-
-> **Note (PR #5 update)**: `querydsl-jpa` is now `implementation` (was `compileOnly`). The old `compileOnly` was a historical hand-me-down — it works fine when nothing actually uses `JPAQueryFactory`, but the moment you write the first real QueryDSL code you get `NoClassDefFoundError: com/querydsl/core/types/EntityPath` on test/runtime classpath. If you ever roll it back to `compileOnly` you must re-validate Swagger UI + Spring Data 4.x boot AND prove no QueryDSL code paths run.
+- Build (with tests): `./gradlew build`
+- Single test class: `./gradlew test --tests "<FQN>"`
+- Local run needs MySQL at `localhost:3309` (db `moodiary`, user `dev`/`dev123`). Setup → [README "빠른 시작"](./README.md).
+- **Never edit `src/main/resources/application.yaml` directly.** New keys must use `${ENV_VAR:default}` placeholders. Per-developer overrides go in `src/main/resources/application-local.yaml` (gitignored, auto-merged by Spring).
+- **QueryDSL**: `querydsl-jpa` is `implementation` (not `compileOnly`). Q-classes generated to `src/main/generated/`. See [troubleshooting T-016](./claude-docs/troubleshooting.md) before changing this — there's a real reason.
 
 ## Architecture
 
-### Layer Structure
-Standard Spring layered architecture: `Controller → Service → Repository → Entity`
+Layered: `Controller → Service → Repository → Entity`. Package layout in [README "아키텍처"](./README.md).
 
-```
-hoseo.moodiary
-├── controller/     # @RestController — HTTP endpoints, returns ResponseEntity
-├── service/        # @Service @Transactional — business logic
-├── repository/     # Spring Data JPA interfaces (extend JpaRepository)
-├── entitiy/        # JPA @Entity classes  ← package name is intentionally "entitiy" (typo); keep using it
-│   └── base/       # BaseEntity — createdAt/updatedAt via JPA Auditing
-├── dto/
-│   ├── request/    # Input DTOs — include toEntity() factory method
-│   └── response/   # Output DTOs — @Builder pattern, ErrorResponseDto for error bodies
-└── exception/      # Domain exceptions + GlobalExceptionHandler (@RestControllerAdvice)
-```
-
-### Key Conventions
-- Entity primary keys use UUID (`@UuidGenerator` from Hibernate); column name = `<table>_id` (e.g. `post_id`)
-- All entities extend `BaseEntity` and inherit `createdAt` / `updatedAt`
-- `@NoArgsConstructor(access = AccessLevel.PROTECTED)` on entities; mutation goes through explicit methods (e.g. `Post.update(...)`) so updates work via dirty-checking inside `@Transactional`
-- Request DTOs expose a `toEntity()` method; Response DTOs are built inline in the service via `@Builder`
-- Read-only service methods carry `@Transactional(readOnly = true)`
-- Each domain exception (e.g. `PostNotFoundException`) gets a dedicated `@ExceptionHandler` in `GlobalExceptionHandler` that maps it to an `ErrorResponseDto { message }` with the appropriate HTTP status. Validation errors (`MethodArgumentNotValidException`) and malformed JSON (`HttpMessageNotReadableException`) are already wired there — extend that file rather than catching in controllers.
+### Code conventions (Claude must internalize)
+- Layer packages: `controller / service / repository / entitiy / dto.{request,response} / exception / security / config`. Note `entitiy/` is an intentional historical typo — keep using it.
+- Entity primary keys use UUID (`@UuidGenerator` from Hibernate); column name = `<table>_id` (e.g. `post_id`).
+- All entities extend `BaseEntity` and inherit `createdAt` / `updatedAt`.
+- `@NoArgsConstructor(access = AccessLevel.PROTECTED)` on entities; mutation goes through explicit methods (e.g. `Post.update(...)`) so updates work via dirty-checking inside `@Transactional`.
+- Request DTOs expose a `toEntity()` method; Response DTOs are built inline in the service via `@Builder`.
+- Read-only service methods carry `@Transactional(readOnly = true)`.
+- Each domain exception (e.g. `PostNotFoundException`) gets a dedicated `@ExceptionHandler` in `GlobalExceptionHandler` mapping to `ErrorResponseDto { message }` + appropriate HTTP status. Validation (`MethodArgumentNotValidException`), malformed JSON (`HttpMessageNotReadableException`), and missing query params (`MissingServletRequestParameterException`) are already wired — extend that file rather than catching in controllers.
 
 ### Auditing
-`@EnableJpaAuditing` lives on `MoodiaryApplication`. Disabling auditing means turning it off there; without it `BaseEntity` timestamps stop populating.
+`@EnableJpaAuditing` lives on `JpaAuditingConfig` (not the main class — slice tests would break otherwise). Without it, `BaseEntity` timestamps stop populating.
 
-### Database
-- Local dev: MySQL on port 3309, db `moodiary`, user `dev`/`dev123`
-- `ddl-auto: update` (default in `application.yaml`) — schema is **mid-flight** during this project. Hibernate adds missing columns/tables on boot; existing data is kept. **Switch to `validate` once schema stabilizes** (around Flyway introduction, PR 6).
-  - Tradeoff: `update` doesn't reliably create indexes/constraints. If those matter, write the DDL manually and document it in the PR.
-- `show_sql: true` + `format_sql: true` — generated SQL is logged. Useful for verifying QueryDSL output.
-- Production: AWS RDS MySQL; credentials injected via `SPRING_DATASOURCE_URL` / `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` environment variables on the container. Same `ddl-auto: update` policy applies until further notice.
+### Database policy
+- `ddl-auto: update` (default in `application.yaml`) — schema is mid-flight. Hibernate adds missing columns/tables on boot; existing data is kept.
+- `update` does **not** reliably create indexes/constraints — when those matter, write the DDL manually and document it in the PR.
+- Plan: switch to `validate` when Flyway lands (PR 6). Don't change `ddl-auto` casually before then.
 
-## CI/CD
-
-| Trigger | Workflow | What it does |
-|---|---|---|
-| PR → `dev` | `moodiary-be-ci.yaml` | `./gradlew build` (runs tests) + uploads `build/reports/tests/test/` as artifact |
-| `push` → `main` | `moodiary-be-cd.yaml` | Build → push image to Docker Hub → deploy to EC2 via AWS SSM `send-command` |
-
-The CD job runs `docker build` against the repo (using `Dockerfile`, base image `amazoncorretto:25-al2023-headless`) and copies `build/libs/*.jar` into the image. On deploy, SSM runs `docker stop/rm/pull/run` on the target EC2 instance, exposing port 8080 and injecting `SPRING_DATASOURCE_*` env vars.
-
-Required GitHub Secrets:
-- Docker Hub: `DOCKER_HUB_USERNAME`, `DOCKER_HUB_TOKEN`
-- AWS (OIDC): `AWS_GITHUB_OIDC_ROLE_ARN`, `AWS_REGION`, `EC2_INSTANCE_ID`
-- RDS: `RDS_ENDPOINT`, `RDS_USERNAME`, `RDS_PASSWORD`
-
-To reproduce the production image locally:
-```bash
-./gradlew build -x test
-docker build -t moodiary:local .
-```
+## CI/CD note
+Trigger table + secrets in [README "배포"](./README.md). One thing worth remembering: CD path on `main` = GitHub Actions → Docker Hub → AWS SSM → EC2 `docker compose` (compose.yaml at repo root, pulled by SSM at deploy). If a new env var is added to compose, **both** GitHub Secrets and EC2 `.env` must be updated.
 
 ## Workflow rules (Claude reads this)
 
