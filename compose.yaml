@@ -1,38 +1,36 @@
+# Moodiary 운영 compose 파일.
+#
+# - 운영 EC2 의 /home/ec2-user/compose.yaml 과 동일 (CD 가 매 배포마다 repo 의 이 파일로 동기화).
+# - 모든 비밀값은 EC2 의 /home/ec2-user/.env 에서 주입. .env 는 gitignored.
+# - 로컬에서는 사용하지 않는다 — 로컬은 `./gradlew bootRun` + 별도 docker run mysql 컨테이너.
+#
+# .env 에 있어야 하는 키 (값 예시는 .env.example 참고):
+#   DOCKER_HUB_USERNAME  — 이미지 풀 받을 docker hub 사용자명
+#   RDS_ENDPOINT         — RDS 호스트
+#   RDS_USERNAME         — RDS 사용자
+#   RDS_PASSWORD         — RDS 비밀번호
+#   JWT_SECRET           — JWT 서명 키 (Base64 32바이트 이상)
+#
+# 운영 갱신 흐름
+# 1) push → main → GitHub Actions CD
+# 2) CD: Docker Hub 에 새 이미지 :latest 푸시
+# 3) CD: AWS SSM 으로 EC2 에서 다음 실행
+#       cd /home/ec2-user
+#       curl -sfL https://raw.githubusercontent.com/Goospel/hoseo-moodiary/main/compose.yaml -o compose.yaml
+#       docker compose pull
+#       docker compose up -d
+# 4) compose 가 .env 자동 로드 → pull_policy:always 라 매번 최신 이미지로 재기동
+
 services:
   hoseo-moodiary:
     container_name: hoseo-moodiary
-    image: hoseo-moodiary:latest
+    image: ${DOCKER_HUB_USERNAME}/hoseo-moodiary-linux:latest
+    restart: unless-stopped   # EC2 재부팅 시 자동 기동
+    pull_policy: always       # 매 `docker compose up -d` 마다 :latest 재확인
     ports:
       - "8080:8080"
     environment:
-      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql-moodiary:3306/moodiary
-      - SPRING_DATASOURCE_USERNAME=dev
-      - SPRING_DATASOURCE_PASSWORD=dev123
-    networks:
-      - moodiary-network
-    depends_on:
-      mysql-moodiary:
-        condition: service_healthy
-
-  mysql-moodiary:
-    container_name: mysql-hoseo
-    image: mysql:9.3
-    environment:
-      MYSQL_ROOT_PASSWORD: 20201010
-      MYSQL_DATABASE: moodiary
-      MYSQL_USER: dev
-      MYSQL_PASSWORD: dev123
-    ports:
-      - "3309:3306"
-    networks:
-      - moodiary-network
-    healthcheck:
-      test: "mysqladmin ping -h localhost -u dev -pdev123 || exit 1"
-      interval: 3s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-
-networks:
-  moodiary-network:
-    driver: bridge
+      - SPRING_DATASOURCE_URL=jdbc:mysql://${RDS_ENDPOINT}:3306/moodiary
+      - SPRING_DATASOURCE_USERNAME=${RDS_USERNAME}
+      - SPRING_DATASOURCE_PASSWORD=${RDS_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
