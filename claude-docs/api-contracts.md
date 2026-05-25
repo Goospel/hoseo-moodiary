@@ -68,10 +68,11 @@
 - 현재 미적용 (Post 전체 조회는 그냥 List 반환)
 - 추후 도입 시 Spring Data 표준 `Page<T>` 형태 (`content`, `totalElements`, `totalPages`, `number`)
 
-### 인증 (예정, PR 2)
+### 인증
 - 헤더: `Authorization: Bearer <JWT>`
 - 화이트리스트: `/swagger-ui/**`, `/v3/api-docs/**`, `/auth/**`
 - 그 외 모든 엔드포인트는 토큰 필수
+- 상세 (JWT 구조 / 시크릿 관리 / 약점) → [`security.md`](./security.md)
 
 ---
 

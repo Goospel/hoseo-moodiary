@@ -223,6 +223,7 @@ docker build -t moodiary:local .
 | [`CLAUDE.md`](./CLAUDE.md) | Claude Code 작업 가이드 (워크플로우 규칙 포함) |
 | [`claude-docs/plan.md`](./claude-docs/plan.md) | 로드맵 + 백로그 + 의사결정 로그 |
 | [`claude-docs/api-contracts.md`](./claude-docs/api-contracts.md) | API 상세 명세 + 외부 AI 서버 계약 |
+| [`claude-docs/security.md`](./claude-docs/security.md) | JWT / 비밀번호 / 시크릿 관리 / 인가 규칙 / 약점 정리 |
 | [`claude-docs/troubleshooting.md`](./claude-docs/troubleshooting.md) | 누적 트러블슈팅 로그 |
 
 ---
