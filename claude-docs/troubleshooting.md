@@ -2,7 +2,7 @@
 
 > 작업 중 막혔던 지점, 원인, 해결법을 한 파일에 누적.
 > **규칙**: 새로 막힐 때마다 맨 위 인덱스에 한 줄 추가 → 해당 섹션에 상세 기록.
-> 마지막 갱신: 2026-05-24 (PR 2-c)
+> 마지막 갱신: 2026-05-24 (PR 1 - CD compose 통일)
 
 ---
 
@@ -20,6 +20,8 @@
 
 ### 빌드/배포 함정
 - [T-013](#t-013) `application.yaml` 이 `.gitignore` 되어 있어 운영에 설정이 전달되지 않음
+- [T-014](#t-014) CD 워크플로우에 시크릿 주입 라인 누락 — yaml 기본값이 운영에 노출
+- [T-015](#t-015) Claude 가 머지된 PR 을 열린 것으로 착각 → 닫힌 브랜치에 작업 계속
 
 ### AWS / 운영 인프라
 - [T-006](#t-006) EC2 stop/start 시 퍼블릭 IP가 매번 바뀜 → GitHub Secret 갱신 지옥
@@ -123,6 +125,30 @@
 | **해결** | <br>① `.gitignore` 에서 application.yaml 줄 제거 <br>② 대신 `application-local.yaml` 만 gitignore (개인 override 용 — Spring 이 자동 merge) <br>③ 커밋된 application.yaml 의 모든 비밀값은 `${ENV_VAR:기본값}` 형식으로 — 운영은 env var override, 로컬은 기본값으로 동작 |
 | **시점** | PR 3 작업 중 발견 |
 | **교훈** | 설정 파일을 통째로 gitignore 하는 건 거의 항상 잘못된 선택. 비밀값만 env var 로 빼고 파일 자체는 추적. "기본값 + 환경별 override" 패턴이 표준. <br><br>**일반화**: 운영에 영향을 주는 파일을 gitignore 하려는 충동이 들면, 그 파일의 어떤 *값*이 비밀인지부터 분리 가능한지 먼저 의심하자 |
+
+---
+
+<a id="t-014"></a>
+### T-014 · CD 워크플로우에 시크릿 주입 라인 누락 → yaml 기본값이 운영에 노출
+
+| | |
+|---|---|
+| **증상** | release PR(#27) 직전 점검 중 발견: CD 워크플로우의 `docker run` 에 `-e JWT_SECRET=...` 가 빠져 있었음. 그대로 main 머지했다면 컨테이너가 yaml 기본값 (`dev-local-secret-...`) 으로 부팅 → 누구나 토큰 위조 가능 |
+| **원인** | PR 2-c (#23) 에서 한 번 추가했었는데 어느 시점 머지 과정에서 빠져 있었음. CD 가 `docker run -e ...` 패턴이라 시크릿 추가할 때마다 워크플로우 yaml 을 손으로 고쳐야 하고, 그 라인이 누락돼도 빌드 자체는 통과 |
+| **해결** | <br>① 즉시: `-e JWT_SECRET=${{ secrets.JWT_SECRET }} \` 한 줄 추가 PR (#26) → release 전에 합류<br>② 구조적: **PR 1 (CD를 docker compose 호출로 통일)** 이 본질적 해결. compose 가 `.env` 자동 로드하면 시크릿 추가 = `.env` 한 줄 추가로 끝 |
+| **시점** | PR #27 release 직전 |
+| **교훈** | "필수 환경변수"는 다음 두 가지 방어선이 있어야 함:<br>1. **시작 시 검증** — 코드에서 \"secret이 default 값이면 boot 실패하게\" 만들기 (소소한 fail-fast)<br>2. **CD 가 의도적으로 환경변수 누락하면 알려주기** — env var → \`.env\` 단일 소스 전환 (PR 1) |
+
+<a id="t-015"></a>
+### T-015 · Claude 가 머지된 PR 을 열린 것으로 착각 → 닫힌 브랜치에 작업 계속
+
+| | |
+|---|---|
+| **증상** | 사용자가 GitHub UI 에서 PR 을 머지한 시점과 Claude 가 그걸 인지하는 시점 사이에 갭. Claude 는 자기가 마지막으로 본 PR 상태(open)를 사실로 간주하고, 닫힌/머지된 PR 을 \"작업 중\"으로 참조하거나, 머지된 feature branch 로 새 작업을 시작 |
+| **원인** | Claude 의 상태 추적은 마지막 tool call 기준. 사용자가 외부 채널(GitHub Web)로 상태를 바꿔도 Claude 는 모름. 추측에 의존 |
+| **해결** | CLAUDE.md 에 **Workflow rules** 섹션 신설 (PR #25). 의무 규칙:<br>1. PR 만들기/언급하기 전에 항상 `gh pr list --state all --limit 10` 으로 상태 확인<br>2. 새 작업 시작 전 `git fetch origin && git checkout dev && git pull origin dev`<br>3. 운영 영향 변경은 PR body 에 "운영 머지 전 필수" 체크리스트 명시 |
+| **시점** | 이번 세션 내내 누적되다가 명문화 |
+| **교훈** | LLM 은 외부 상태 변화를 자동 감지하지 못한다 — 추측하지 말고 항상 \"확인 명령\"을 한 번 더. 사람한테는 당연하지만 Claude 한테는 명문화 안 하면 반복된다 |
 
 ---
 
