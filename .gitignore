@@ -43,3 +43,6 @@ out/
 
 ### Local debug logs (server/container logs, never commit) ###
 /.local-logs/
+
+### Secrets — compose 가 자동 로드. EC2 의 ~/.env 와 동일 구조. .env.example 참고 ###
+.env

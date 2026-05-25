@@ -93,7 +93,11 @@
 
 ## 🔄 진행 중
 
-> 현재 활성 작업 없음. PR #27 release 직후 다음 사이클 대기.
+> **PR 1 — CD 워크플로우 docker compose 호출로 통일** (AI 합의 대기 중 우회 작업)
+> - `compose.yaml` 운영 표준화 (DOCKER_HUB_USERNAME 등 .env 기반)
+> - `.env.example` 신설 + `.env` gitignore 명시
+> - CD 가 docker run → `curl compose.yaml + docker compose pull/up -d` 로 전환
+> - 머지 후 EC2 .env 에 `DOCKER_HUB_USERNAME` 추가 + 재부팅 자동 기동 검증 필요
 
 ---
 

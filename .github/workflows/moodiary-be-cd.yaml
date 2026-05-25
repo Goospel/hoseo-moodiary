@@ -71,24 +71,21 @@ jobs:
           role-to-assume: ${{ secrets.AWS_GITHUB_OIDC_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Deploy to EC2 via SSM
+      # 배포는 EC2 의 docker compose 로 통일.
+      # - repo 의 compose.yaml 을 EC2 로 가져옴 (단일 진실의 원천)
+      # - 시크릿은 EC2 의 /home/ec2-user/.env 에서 주입 (워크플로우는 시크릿 모름)
+      # - pull_policy:always + restart:unless-stopped 이라 재부팅 시 자동 기동
+      - name: Deploy to EC2 via SSM (docker compose)
         run: |
           aws ssm send-command \
           --document-name "AWS-RunShellScript" \
-          --comment "Deploy hoseo-moodiary via SSM" \
+          --comment "Deploy hoseo-moodiary via docker compose" \
           --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
           --parameters 'commands=[
-            "docker stop hoseo-moodiary || true",
-            "docker rm hoseo-moodiary || true",
-            "docker pull ${{ secrets.DOCKER_HUB_USERNAME }}/hoseo-moodiary-linux:latest",
-            "docker run -d \
-            --name hoseo-moodiary \
-            -p 8080:8080 \
-            -e SPRING_DATASOURCE_URL=jdbc:mysql://${{ secrets.RDS_ENDPOINT}}:3306/moodiary \
-            -e SPRING_DATASOURCE_USERNAME=${{ secrets.RDS_USERNAME }} \
-            -e SPRING_DATASOURCE_PASSWORD=${{ secrets.RDS_PASSWORD }} \
-            -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
-            ${{ secrets.DOCKER_HUB_USERNAME }}/hoseo-moodiary-linux:latest"
+            "cd /home/ec2-user",
+            "curl -sfL https://raw.githubusercontent.com/Goospel/hoseo-moodiary/main/compose.yaml -o compose.yaml",
+            "docker compose pull",
+            "docker compose up -d"
           ]' \
           --region "${{ secrets.AWS_REGION }}" \
           --output text
