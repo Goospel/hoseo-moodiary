@@ -7,6 +7,7 @@
 > 📚 **관련 문서**:
 > - [`README.md`](../README.md) — 프로젝트 소개 (외부 공개용)
 > - [`api-contracts.md`](./api-contracts.md) — API 상세 명세 (request/response/예시, 외부 AI 서버 계약)
+> - [`security.md`](./security.md) — JWT / 비밀번호 / 시크릿 관리 / 인가 규칙 / 약점 정리
 > - [`troubleshooting.md`](./troubleshooting.md) — 막혔던 지점 + 원인 + 해결 로그 (지속 누적)
 > - [Swagger UI](http://15.165.95.129:8080/swagger-ui/index.html) — 구현된 API의 실시간 진실의 원천
 
