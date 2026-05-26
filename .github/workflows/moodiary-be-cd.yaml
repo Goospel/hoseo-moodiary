@@ -1,3 +1,17 @@
+# CD — main 머지 시 운영 자동 배포.
+#
+# 흐름:
+#   1) gradle build (테스트 포함)
+#   2) Docker image build + push (latest + commit sha 양쪽 태그)
+#   3) AWS OIDC 자격증명
+#   4) SSM 으로 EC2 에서 `docker compose pull && up -d` 실행
+#      — send-command → command-id 받고 → wait 로 실제 종료까지 대기 → status=Success 확인.
+#        (T-019: 옛 워크플로우는 send-command 의 enqueue 응답만 받고 "성공" 으로 끝나 SSM 죽음을 못 잡았다.)
+#   5) Health check — EC2 에서 swagger 200 polling. 컨테이너 부팅 실패를 CD 단계에서 잡는다.
+#
+# 롤백: Docker Hub 에 `:latest` + `:<commit-sha>` 둘 다 push 하므로 EC2 .env 의 image 태그를
+#       `:<옛 commit-sha>` 로 바꾸고 `docker compose up -d` 하면 즉시 옛 버전으로 복귀 가능.
+
 name: CD - Build and Push Docker Image
 
 on:
@@ -5,7 +19,8 @@ on:
     branches: [main]
 
 jobs:
-  springboot-moodiary-backend-cd:
+  build-and-push:
+    name: Build & Push Docker image
     runs-on: ubuntu-24.04
 
     steps:
@@ -40,26 +55,26 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      - name: Build Docker image
-        run: docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/hoseo-moodiary-linux:latest .
-
-      - name: Push Docker Image
-        run: docker push ${{ secrets.DOCKER_HUB_USERNAME }}/hoseo-moodiary-linux:latest
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # buildx + cache 한 번에 build & push.
+      # tags 두 줄 — :latest (compose.yaml 이 참조), :<commit-sha> (롤백 옵션).
+      # 옛 워크플로우는 `docker build/push` + `buildx build-push` 가 같은 image 를 두 번 빌드/푸시했다.
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/hoseo-moodiary-linux:latest
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/hoseo-moodiary-linux:latest
+            ${{ secrets.DOCKER_HUB_USERNAME }}/hoseo-moodiary-linux:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   deploy:
-    needs: springboot-moodiary-backend-cd
+    name: Deploy to EC2 + verify
+    needs: build-and-push
     runs-on: ubuntu-24.04
     permissions:
       id-token: write
@@ -71,21 +86,121 @@ jobs:
           role-to-assume: ${{ secrets.AWS_GITHUB_OIDC_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # 배포는 EC2 의 docker compose 로 통일.
-      # - repo 의 compose.yaml 을 EC2 로 가져옴 (단일 진실의 원천)
-      # - 시크릿은 EC2 의 /home/ec2-user/.env 에서 주입 (워크플로우는 시크릿 모름)
-      # - pull_policy:always + restart:unless-stopped 이라 재부팅 시 자동 기동
-      - name: Deploy to EC2 via SSM (docker compose)
+      # SSM 으로 EC2 에서 docker compose pull && up -d.
+      # 옛 워크플로우와 핵심 차이:
+      #   - send-command 의 응답에서 CommandId 를 capture
+      #   - wait command-executed 로 *실제 종료 상태* 까지 대기
+      #   - get-command-invocation 의 Status 가 "Success" 가 아니면 명시적 exit 1
+      # → SSM agent 가 죽었거나 EC2 에서 docker pull 이 실패하면 CD 가 fail 로 떨어진다 (T-019 방어).
+      - name: Deploy to EC2 via SSM (docker compose pull + up)
+        env:
+          INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          aws ssm send-command \
-          --document-name "AWS-RunShellScript" \
-          --comment "Deploy hoseo-moodiary via docker compose" \
-          --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
-          --parameters 'commands=[
-            "cd /home/ec2-user",
-            "curl -sfL https://raw.githubusercontent.com/Goospel/hoseo-moodiary/main/compose.yaml -o compose.yaml",
-            "docker compose pull",
-            "docker compose up -d"
-          ]' \
-          --region "${{ secrets.AWS_REGION }}" \
-          --output text
+          set -euo pipefail
+
+          echo "::group::SSM send-command (deploy)"
+          COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy hoseo-moodiary (${{ github.sha }})" \
+            --instance-ids "$INSTANCE_ID" \
+            --parameters 'commands=[
+              "cd /home/ec2-user",
+              "curl -sfL https://raw.githubusercontent.com/Goospel/hoseo-moodiary/main/compose.yaml -o compose.yaml",
+              "docker compose pull",
+              "docker compose up -d"
+            ]' \
+            --region "$AWS_REGION" \
+            --query "Command.CommandId" \
+            --output text)
+          echo "CommandId: $COMMAND_ID"
+          echo "::endgroup::"
+
+          echo "::group::Wait for SSM execution"
+          # 기본 polling 5초 × 30 = 150초. compose pull + up 은 보통 30-60초.
+          # 실패 / TimedOut 시 wait 자체가 non-zero exit 로 떨어진다.
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region "$AWS_REGION"
+          echo "::endgroup::"
+
+          echo "::group::SSM execution result"
+          # wait 가 Success 외 상태에서도 exit 0 일 수 있으므로 명시적 Status 체크.
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region "$AWS_REGION" \
+            --query "Status" --output text)
+          echo "Status: $STATUS"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region "$AWS_REGION" \
+            --query "{ResponseCode:ResponseCode,Output:StandardOutputContent,Error:StandardErrorContent}" \
+            --output json
+          if [ "$STATUS" != "Success" ]; then
+            echo "❌ SSM deploy command did not finish with Success (status=$STATUS)."
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      # 컨테이너가 부팅하다 죽는 경우 (T-019 의 BeanCreationException 같은 시나리오)
+      # 를 CD 단계에서 잡기 위한 health probe.
+      # SSM 으로 EC2 안에서 swagger 200 을 polling 한다 (외부 보안그룹/IP 변동 영향 없음).
+      - name: Health check — Spring Boot swagger 200 확인
+        env:
+          INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -euo pipefail
+
+          echo "::group::SSM send-command (health check)"
+          COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --comment "Health check after deploy (${{ github.sha }})" \
+            --instance-ids "$INSTANCE_ID" \
+            --parameters 'commands=[
+              "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do",
+              "  if curl -sf -o /dev/null -w \"%{http_code}\" http://localhost:8080/swagger-ui/index.html | grep -q 200; then",
+              "    echo OK_swagger_200_attempt_$i;",
+              "    exit 0;",
+              "  fi;",
+              "  echo waiting_swagger_attempt_$i;",
+              "  sleep 5;",
+              "done;",
+              "echo FAIL_swagger_not_200_in_60s;",
+              "docker logs hoseo-moodiary --tail 50 || true;",
+              "exit 1"
+            ]' \
+            --region "$AWS_REGION" \
+            --query "Command.CommandId" \
+            --output text)
+          echo "CommandId: $COMMAND_ID"
+          echo "::endgroup::"
+
+          echo "::group::Wait for health check"
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region "$AWS_REGION"
+          echo "::endgroup::"
+
+          echo "::group::Health check result"
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region "$AWS_REGION" \
+            --query "Status" --output text)
+          echo "Status: $STATUS"
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --region "$AWS_REGION" \
+            --query "{Output:StandardOutputContent,Error:StandardErrorContent}" \
+            --output json
+          if [ "$STATUS" != "Success" ]; then
+            echo "❌ Health check failed (status=$STATUS). 컨테이너가 부팅 실패한 가능성 — 위 로그 확인."
+            exit 1
+          fi
+          echo "::endgroup::"

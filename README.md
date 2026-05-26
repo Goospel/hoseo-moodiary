@@ -13,6 +13,21 @@
 
 ---
 
+## 📚 문서 navigator
+
+처음 본 사람은 위에서 아래로 — 이미 코드 작업 중이라면 상황에 맞게 점프.
+
+| 너의 상황 | 보는 파일 |
+|---|---|
+| 무엇이 끝났고 무엇이 남았나 (PR 단위 로드맵) | [`claude-docs/plan.md`](./claude-docs/plan.md) |
+| API 호출 규약 — 응답 포맷, 에러 매핑, 인증 헤더, CORS | [`claude-docs/api-contracts.md`](./claude-docs/api-contracts.md) |
+| 보안 한눈에 — JWT 발급/검증, CORS, 인증/인가 흐름 | [`claude-docs/security.md`](./claude-docs/security.md) |
+| **작업 중 막혔다** — 누가 같은 trap 을 먼저 만났을 수도 | [`claude-docs/troubleshooting.md`](./claude-docs/troubleshooting.md) — T-### 인덱스에서 grep |
+| 코드 짜기 전 컨벤션 / PR 워크플로우 규칙 | [`CLAUDE.md`](./CLAUDE.md) |
+| 운영 일회성 절차 (RDS 데이터 클린업 등) | [`claude-docs/ops-runbooks/`](./claude-docs/ops-runbooks/) |
+
+---
+
 ## 🎯 무엇을 하는 프로젝트인가
 
 사용자가 일기를 작성하면 AI 가 **공감 메시지 + 그 날의 기분 이모지**를 생성한다. 그 이모지는 월별 캘린더 화면에 매핑되어, 한 달 치 감정을 한눈에 보여준다.
