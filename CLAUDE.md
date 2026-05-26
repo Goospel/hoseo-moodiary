@@ -78,6 +78,22 @@ git fetch origin && git checkout dev && git pull origin dev && git checkout -b <
 ### 운영 영향 변경
 `application.yaml`, `.gitignore`, `compose.yaml`, `.github/workflows/`, DB 스키마, 환경변수 — 이 중 하나라도 건드리는 변경은 PR body 에 **"운영 머지 전 필수"** 체크리스트를 박아라. 깊이 묻지 말고 눈에 띄게.
 
+### CI / CD / Pages 워크플로우 fail 진단 — 0번째 진단은 [githubstatus.com](https://www.githubstatus.com/)
+
+GitHub Actions / Pages / CD 워크플로우가 "Set up job" / 액션 download / artifact upload / Pages deploy 같은 **GitHub 인프라 호출 단계에서 즉시 fail** 할 때 — 그러니까 우리 코드/스크립트가 돌기도 전에 죽을 때 — Claude 의 첫 진단은 **항상 [githubstatus.com](https://www.githubstatus.com/) 확인** 이다. 코드도, 워크플로우 yaml 도, 액션 버전도, OIDC 권한도 만지기 전에.
+
+이유: GitHub 인프라 incident 가 지속 중이면 codeload / Actions API / Pages API 가 일시적으로 404 / 500 / timeout 을 던지는데, `gh run view --log-failed` 의 에러는 늘 "특정 SHA tarball 을 못 받음" / "특정 endpoint 가 응답 안 함" 같이 **마치 영구 결함처럼 보이는 모양**으로 떨어진다. 재실행해도 incident 안 풀린 동안엔 같은 에러가 반복되니 "같은 SHA 로 두 번 fail = 그 SHA 가 사라진 영구 상태" 같은 잘못된 추론으로 빨려들기 쉽다 — 그러나 재실행만으로는 "일시 장애" 와 "영구 deprecated" 를 판별할 수 없다. **외부 신호 (githubstatus) 를 봐야 비로소 갈린다.** 이걸 빠뜨리면 멀쩡한 액션 버전을 멋대로 메이저 업그레이드하는 잘못된 fix PR 까지 만들 수 있다 (T-024 에서 실제로 일어난 일).
+
+**진단 순서 (의무)**:
+1. `gh run view <run-id> --log-failed` 로 정확한 에러 메시지 잡기.
+2. 에러가 **GitHub 인프라 호출** (`codeload.github.com`, `api.github.com`, Pages deployment, OIDC token 발급, Actions runner provisioning 등) 에 관한 거면 → **[githubstatus.com](https://www.githubstatus.com/) 확인**.
+3. `Git Operations` / `API Requests` / `Actions` / `Pages` / `Webhooks` 중 해당 컴포넌트가 **오렌지 (degraded) 또는 빨강 (major outage)** 이면 → **아무 것도 고치지 말고 GitHub 가 복구할 때까지 대기**. 그 사이에 코드 / 액션 버전 / yaml 을 만지면 잘못된 진단이 PR 로 굳어버린다.
+4. githubstatus 가 깨끗한데도 같은 에러가 반복되면 그제서야 코드 / 액션 버전 / 토큰 / 권한 의심.
+
+**예외 — 우리 스크립트 단계가 죽은 경우**: 워크플로우의 `run:` 블록 안 (예: `./gradlew build`, `marp ...`, `docker-compose pull`) 에서 fail 한 거면 우리 코드/명령의 문제일 가능성이 훨씬 높다 — 그 때는 githubstatus 우선순위가 낮아지고 직접 디버깅이 먼저. **이 규칙은 "GitHub 인프라가 우리 코드 돌기 전에 죽인 경우" 에 한정**.
+
+> 트리거 사례: T-024 (PR #55 직후 Deploy GitHub Pages 가 `actions/upload-pages-artifact@v3` 의 SHA tarball 404 로 두 번 연속 fail). Claude 가 `gh api` 로 액션 ref/태그를 파보며 "옛 메이저가 deprecated 된 모양이다, v5 로 올리자" 라는 그럴듯한 가설로 점프했지만 — 사용자가 githubstatus 의 Actions/Pages 오렌지를 보고 진단을 바로잡아줬다. **매끄러운 가설일수록 의심을 한 번 더, 그리고 외부 신호를 한 번 더.**
+
 ### PR 생성 전 — troubleshooting 로그 sweep
 Claude 가 여는 모든 PR 의 task 리스트에서 **마지막에서 두 번째 task = "troubleshooting.md 점검"** 이다. 다음 체크리스트를 돌린다:
 
