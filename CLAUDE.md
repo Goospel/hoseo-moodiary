@@ -69,6 +69,20 @@ gh pr list --state all --limit 10
 
 > **트리거 범위 확장의 역사**: T-015 는 "PR 생성 전" 만 명시, T-018 은 "추가 push 전" 까지 확장, T-020 은 "PR 메타데이터 변경 전" 까지 확장. 같은 패턴이 회색 지대를 새로 발견할 때마다 재발했다 — 그래서 위 목록은 회색 지대 한정 열거가 아니라 **"`gh pr` 으로 시작하는 거의 모든 명령" 으로 일반화** 된 것이다. 새로운 `gh pr` 서브커맨드가 미래에 추가되어도 이 규칙은 그대로 적용된다.
 
+### PR 생성과 머지의 분담 — Claude 는 생성, 사용자는 머지
+
+**역할 분담** (사용자 명시 합의, 2026-05-26):
+
+- **PR 생성은 Claude 의 일** — 브랜치 따기 → commit → push → `gh pr create` 까지. PR 본문도 Claude 가 작성.
+- **머지는 사용자의 일** — Claude 는 `gh pr merge` 를 자동으로 돌리지 마라. 사용자가 GitHub UI 에서 리뷰 후 직접 머지한다.
+- **그래서 PR 생성 후 머지 진행 여부를 사용자에게 묻지 마라.** PR 링크 + 핵심 요약만 보고하고 그 task 는 종료. AskUserQuestion 으로 "merge 진행할까?" 를 띄우는 건 사용자가 명시한 분담을 거스르는 노이즈다. 사용자는 다음 task 로 자연스럽게 넘어가거나 머지를 직접 한 뒤 다음 지시를 준다.
+
+**예외 — 사용자가 명시적으로 머지까지 요청한 경우에만 Claude 가 머지**:
+- "머지해" / "squash merge 해" / "이거 dev 까지 넣어줘" 같이 머지 행위를 명시한 메시지.
+- 단순히 "PR 만들어줘" / "dev 로 머지하자" 같은 표현은 **PR 생성까지가 범위** — 한국어의 "머지하자" 는 흐름상 "PR 만들어서 dev 로 보내자" 까지의 의미로 굳어졌다 (Anthropic auto-classifier 도 같은 해석).
+
+> 이 규칙의 트리거: PR #55 (이 PR 직전 PR) 에서 Claude 가 `gh pr merge` 를 자동으로 시도했다가 classifier 가 거부 → AskUserQuestion 으로 승인 받음. 사용자가 "PR은 너가 생성해. 머지는 내가 할게. 이것도 CLAUDE.md 로 규칙으로 정해놔. 계속 물어보지말고" 라고 분담을 명시.
+
 ### 새 feature/fix 작업 시작 전 — dev 동기화
 ```bash
 git fetch origin && git checkout dev && git pull origin dev && git checkout -b <new-branch>
