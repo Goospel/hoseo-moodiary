@@ -39,3 +39,11 @@ spring:
 jwt:
   secret: ${JWT_SECRET:dev-local-secret-CHANGE-ME-in-production-min-32-bytes-required!}
   expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+
+# CORS 설정 (PR 8 — 프론트 S3 통합)
+# - allowed-origins: 콤마 구분된 origin 목록. CorsConfig 가 split 해서 사용.
+# - 기본값은 로컬 dev (CRA 3000, Vite 5173, Next 3000). 운영은 EC2 .env 의 APP_CORS_ALLOWED_ORIGINS 로 override 해서 S3 endpoint URL 추가.
+# - 와일드카드(*) 금지 — CorsConfig 의 allowCredentials=true 와 충돌. 정확한 URL 만.
+app:
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}

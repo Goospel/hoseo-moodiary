@@ -199,7 +199,7 @@ PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연�
 
 ---
 
-### PR 8 — 프론트엔드 S3 정적 배포 + CORS 통합 🌐 ⭐⭐⭐
+### PR 8 — 프론트엔드 S3 정적 배포 + CORS 통합 🌐 ⭐⭐⭐ (🔄 BE 부분 진행 중)
 **Why**: 졸업 발표 = "프론트가 떴고 백엔드와 통신해서 일기 작성 / 캘린더 확인 가능" 까지 가야 의미 있는 데모. 현재는 Swagger UI 만으로 발표하는데 시각적 인상 약함.
 
 **설계 결정** (이번 PR 의 의사결정 — [의사결정 로그](#-의사결정-로그) 참조):
@@ -214,13 +214,11 @@ PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연�
 ---
 
 **BE 레포(이 레포)의 일** — 사실상 CORS 한 클래스가 전부:
-- [ ] `WebMvcConfigurer` 기반 CORS 설정 클래스 — allowed origins:
-  - S3 endpoint URL (예: `http://moodiary-frontend.s3-website.ap-northeast-2.amazonaws.com`)
-  - 로컬 dev (`http://localhost:3000`, `http://localhost:5173` 등 — FE 빌드 도구에 따라)
-- [ ] (선택) `application.yaml` 에 `app.cors.allowed-origins` 외부화 — env var override 가능하게
-- [ ] `SecurityFilterChain` 에 `.cors(Customizer.withDefaults())` 활성화
-- [ ] (선택) `application.yaml` 의 `springdoc.servers` 에 운영 URL 명시 — Swagger UI 에서 직접 호출 시 운영 서버 선택 가능
-- [ ] CORS preflight (OPTIONS) 단위 테스트 — Origin 헤더 시뮬레이션해서 `Access-Control-Allow-Origin` 응답 확인
+- [x] `CorsConfig` — `CorsConfigurationSource` Bean. allowed origins / methods / headers / credentials 명시
+- [x] `application.yaml` 에 `app.cors.allowed-origins` 외부화 — `APP_CORS_ALLOWED_ORIGINS` env var override
+- [x] `SecurityFilterChain` 에 `.cors(Customizer.withDefaults())` 활성화 — preflight 가 인증 검사 전 통과
+- [ ] (선택) `springdoc.servers` 에 운영 URL 명시 — 후속 PR 로
+- [x] CORS preflight 단위 테스트 4 cases (허용/미허용/localhost/Authorization 헤더 포함)
 
 ---
 
