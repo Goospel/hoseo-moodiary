@@ -9,7 +9,7 @@
 > - 단순 오타 / 개인 IDE 문제는 skip.
 > - 항목 schema: **증상 / 원인 / 해결 / 시점 / 교훈**.
 >
-> 마지막 갱신: 2026-05-25 (CLAUDE.md 압축 + sweep rule 명문화 + T-018 (T-015 재발))
+> 마지막 갱신: 2026-05-26 (T-019 추가 — SSM agent 죽음 + CD silent fail + 누적 배포 폭발 + ApplicationContext 안전망 부재)
 
 ---
 
@@ -32,6 +32,7 @@
 - [T-016](#t-016) `compileOnly` QueryDSL — 첫 사용 PR 에서 `NoClassDefFoundError`
 - [T-017](#t-017) `MissingServletRequestParameterException` 미매핑 — 필수 파라미터 누락 시 500
 - [T-018](#t-018) **T-015 재발** — 머지된 PR 브랜치에 추가 commit 푸시 → dead branch (Workflow rule 적용 누락)
+- [T-019](#t-019) SSM agent 죽음 + CD `send-command` async 응답만 보고 "성공" 처리 → 여러 PR 분의 변경이 운영에 도달 못 한 채 누적 → 첫 수동 deploy 에서 두 가지 잠재 결함 (springdoc/Spring Boot 4 호환성 + Post→User FK 마이그레이션) 동시 폭발 → 컨테이너 restart loop
 
 ### AWS / 운영 인프라
 - [T-006](#t-006) EC2 stop/start 시 퍼블릭 IP가 매번 바뀜 → GitHub Secret 갱신 지옥
@@ -192,6 +193,17 @@
 | **해결** | <br>① 누락 commit 을 새 PR(`docs/claude-md-compress-and-sweep-rule`)로 부활 — dev 동기화 → 새 브랜치 → 최종 결과물 한 번에 작성 → push → PR. <br>② Workflow rule 범위 확장: "Before creating a PR" 만이 아니라 **"OR before pushing more commits to an existing branch"** 도 동일 의무. CLAUDE.md 의 규칙 헤더 자체를 다시 작성해서 "추가 push" 도 명시적 트리거로 포함 |
 | **시점** | PR #31 머지 직후 / 이 PR 에서 복구 |
 | **교훈** | 1) 규칙을 명문화했다고 끝이 아니다. **규칙의 적용 시점 범위**가 좁게 박혀버리면 같은 실수가 다른 모양으로 재발한다. T-015 는 "PR 생성 전" 만 잡았지 "추가 push 전" 은 못 잡았다.<br>2) Claude 의 상태 모델은 마지막 tool call 기준이고 외부 머지를 자동 감지하지 못한다 — push 명령은 **항상** 다음으로 시작: `gh pr list --state all --limit 10`. push 자체를 멱등하지 않은 작업으로 취급해야 한다.<br>3) 같은 실수의 재발은 단순 부주의가 아니라 **규칙의 구멍**을 가리킨다. 재발 케이스를 별도 T-### 로 기록해서 다음 Claude 가 "T-015 만 봤어요" 로 끝나지 않게 한다 |
+
+<a id="t-019"></a>
+### T-019 · SSM agent 죽음 + CD silent fail + 누적 배포 폭발 + ApplicationContext 안전망 부재
+
+| | |
+|---|---|
+| **증상** | PR 8 (CORS) 운영 검증에서 preflight 가 401 → 그 후 manual `docker-compose pull && up -d` 로 새 image 띄웠더니 컨테이너 `Up 9 seconds` 후 죽고 다시 시작하는 **restart loop**. `curl /swagger-ui/index.html` → `Connection reset by peer`, `curl -X OPTIONS /post` → `Empty reply from server`. CORS 가 망가진 줄 알았는데 실은 컨테이너 자체가 안 떠 있던 상태. |
+| **원인** | **세 층이 동시에 무너졌다.**<br><br>**① SSM agent 가 EC2 에서 죽어 있었음** — `systemctl status amazon-ssm-agent` 가 dead 였고 journal 도 비어 있었음. 언제 죽었는지 모름.<br><br>**② CD 워크플로우가 silent fail** — `.github/workflows/cd-*.yaml` 의 `aws ssm send-command` 는 비동기. command 가 SSM 큐에 enqueue 되면 즉시 "Pending" 응답이 오고 워크플로우는 그걸 "성공" 으로 종료. 실제로 EC2 에서 `docker pull` 이 일어났는지는 확인하지 않는다. SSM agent 가 죽었으면 큐에 쌓이기만 하고 EC2 는 영원히 새 image 를 안 받는다. GitHub Actions 의 초록 체크는 **거짓 신호**였다.<br><br>**③ 그 사이 머지된 PR 들이 한꺼번에 폭발** — SSM 이 죽고 나서 머지된 PR #24 (Post→User), #31 (Calendar/QueryDSL), #38 (CORS) 은 운영에 한 번도 도달하지 못함. user 가 수동으로 `docker-compose pull` 하는 순간 **누적된 모든 변경이 첫 실배포로 동시에 들어감** → 잠재 결함 두 개가 같이 터짐:<br>&nbsp;&nbsp;a) **springdoc-openapi 2.8.3 ↔ Spring Boot 4 비호환** — `springdoc-openapi-starter-webmvc-ui:2.8.3` 의 `QuerydslPredicateOperationCustomizer` 가 `org.springframework.data.util.TypeInformation` 클래스를 참조하는데, Spring Boot 4 / Spring Data Commons 4.x 에서 위치가 변경되어 `NoClassDefFoundError`. QueryDSL 이 classpath 에 있어야 트리거되므로 PR #31 까지는 `compileOnly` 라 안 터졌고, PR #31 의 `implementation` 전환부터 잠재돼 있었지만 SSM 죽음 때문에 운영 미반영 → 노출 지연.<br>&nbsp;&nbsp;b) **Post → User FK 마이그레이션 미적용** — PR #24 머지 후 운영 RDS 가 한 번도 새 Hibernate DDL 을 실행해본 적 없음. `post` 테이블에 user 없던 시절의 row 가 남아 `ALTER TABLE post ADD FOREIGN KEY user_id REFERENCES users(user_id)` 가 거부됨.<br><br>**④ ApplicationContext 안전망 부재** — `MoodiaryApplicationTests` 가 `@Disabled` 였다. 빌드/단위 테스트에서 full ApplicationContext 를 한 번도 안 띄움 → 운영 첫 부팅에서만 (a) 가 폭발. 슬라이스 테스트 (`@WebMvcTest`, `@DataJpaTest`) 는 springdoc/QueryDSL 자동 구성 빈을 건드리지 않으므로 절대 못 잡는다. |
+| **해결** | **시도 → 평가:**<br><br>**(O) 옳았던 것**:<br>① `docker logs hoseo-moodiary --tail 100` 으로 실제 stack trace 확인 — "CORS 401" 표면 증상에 머물지 않고 컨테이너 부팅 로그까지 내려간 게 결정적.<br>② 운영 버그를 단위 테스트로 재현 — `MoodiaryApplicationTests` 의 `@Disabled` 제거 + H2 testRuntime 추가 → 운영과 동일한 `BeanCreationException` 을 빌드 단계에서 재현 (TDD RED).<br>③ springdoc-openapi `2.8.3 → 3.0.3` 으로 업 — 3.0.x 가 Spring Boot 4.x 호환 라인. RED 였던 ApplicationContext 테스트가 GREEN.<br>④ RDS orphan row 클린업은 runbook 으로 분리 (`claude-docs/ops-runbooks/post-orphan-cleanup-2026-05-26.md`) — 코드 변경과 데이터 변경을 섞지 않음.<br><br>**(X) 옳지 않았거나 잘못 짚었던 것**:<br>① **초기 진단을 CORS 설정 오류로 좁힘** — `preflight=401` 결과만 보고 `Access-Control-Request-Method` 헤더 누락 / origin 매칭 실패 등을 의심. 실제로는 컨테이너가 죽어 있어서 어떤 요청이든 비정상이었음. **컨테이너 health (`docker ps`, `docker logs`) 를 먼저 확인했어야 함.**<br>② **이전 운영 검증 결과 (`swagger=200`, `preflight=401`) 를 "현재 컨테이너 상태"의 증거로 사용** — 그 검증은 restart loop 중 컨테이너가 잠깐 살아있던 짧은 창에서 운 좋게 잡힌 응답이었다. **부팅이 unstable 한 컨테이너의 단일 시점 curl 응답은 신뢰할 수 없다.** 검증 스크립트는 health probe 로 5–10초 간격으로 여러 번 쳤어야.<br>③ **이미지 digest 비교를 "deploy 성공" 의 증거로 사용** — `docker inspect ... .Image` 가 새 sha 였으니 "deploy 됐다" 고 결론. 그러나 image 가 바뀌었다고 **그 안의 코드가 부팅에 성공한다는 보장은 없다**. digest 는 빌드 단계 검증일 뿐, 부팅 검증은 별도.<br>④ **롤백 옵션을 진지하게 고려하지 않음** — fix forward 가 합리적이긴 했지만 검토 시점에 Docker Hub 에 이전 안정 image 태그가 없다는 사실 (only `latest`) 을 확인하고 나서야 fix forward 가 사실상 강제됐음을 인지. 옛 working image 의 태그 보관 정책이 없는 게 사고 대응 옵션을 줄였다. |
+| **시점** | PR #38 (CORS) 머지 후 운영 검증 — 2026-05-26 |
+| **교훈** | **1. SSM agent 의 silent death 는 GitHub Actions 의 초록 체크로 가려진다 — CD 신뢰성 자체가 별도 검증 대상**<br>`aws ssm send-command` 는 enqueue 응답만 받는다. CD 가 "성공" 으로 끝나도 EC2 에서 실제로 명령이 실행됐는지 모른다. 다음 PR (별도 인프라 PR) 에서 다음을 추가해야 한다:<br>&nbsp;&nbsp;- `aws ssm send-command --output text --query "Command.CommandId"` 로 command-id 받기<br>&nbsp;&nbsp;- `aws ssm wait command-executed --command-id <id> --instance-id <ec2>` 로 실행 완료까지 대기<br>&nbsp;&nbsp;- 그 다음 `aws ssm get-command-invocation` 로 exit code 확인<br>&nbsp;&nbsp;- 또는 health probe (`curl http://EC2:8080/actuator/health`) 를 명시적 step 으로<br><br>**2. `@SpringBootTest` 가 `@Disabled` 면 슬라이스 테스트만으로는 운영 부팅 폭발을 절대 못 잡는다**<br>springdoc / 자동 구성 빈 / `JpaAuditing` 활성화 / 모든 `@Component` 스캔 — 이런 자동 구성은 full ApplicationContext 부팅에서만 검증된다. `@WebMvcTest`, `@DataJpaTest` 는 의도적으로 더 작은 그래프만 띄우므로 안전망이 아니다. **`@Disabled` 된 `@SpringBootTest` 는 안전망이 아니라 안전망의 모양만 흉내내는 위장**. 다시 disable 하지 말 것 (해당 테스트의 javadoc 에도 명시).<br><br>**3. 라이브러리 메이저 버전 호환성은 BOM 만으로 보장되지 않는다**<br>Spring Boot 4 로 메이저 업했을 때 build.gradle 에서 명시 버전이 박혀있는 의존성은 BOM 의 트랜지티브 관리를 받지 않는다. springdoc 처럼 명시 버전 박힌 라이브러리는 메이저 업 시 별도로 호환 버전을 확인해야 한다. (`build.gradle` 의 모든 명시 버전 의존성에 "Spring Boot 4 compat?" 코멘트 박는 것도 한 방법.)<br><br>**4. "표면 증상" 으로 좁히지 말고 "부팅 상태" 부터 검증한다**<br>운영 API 가 예상 외 응답을 내면 (CORS 401, 500, timeout 등) **CORS 설정/엔드포인트 구현을 의심하기 전에 컨테이너가 부팅에 성공했는지부터 확인.** 디버깅 첫 명령은 `docker ps` + `docker logs --tail 100`.<br><br>**5. ddl-auto: update 는 "엔티티 도입 ↔ 운영 데이터" 갭을 운영 첫 부팅 시점에 폭발시킨다**<br>새 NOT NULL FK 가 들어가는 PR 은 PR body 에 RDS 데이터 검사/마이그레이션 SQL 을 명시해야 한다. Flyway 도입 (PR 6) 전까지는 PR body 의 "운영 머지 전 필수" 체크리스트에 새 FK / NOT NULL 컬럼 추가 항목 별도 표시.<br><br>**6. Docker image 태그 보관 정책 없음 = 롤백 옵션 없음**<br>`goospel/hoseo-moodiary-linux:latest` 만 push 하면 옛 안정 버전이 사라진다. CD 에서 `latest` 외에 `${{ github.sha }}` 또는 의미 있는 버전 태그를 함께 push 하도록 하면 응급 롤백 옵션 확보. (이 PR 의 후속 인프라 PR 에서 다룰 것.) |
 
 ---
 
