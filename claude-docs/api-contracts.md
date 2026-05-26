@@ -74,6 +74,15 @@
 - 그 외 모든 엔드포인트는 토큰 필수
 - 상세 (JWT 구조 / 시크릿 관리 / 약점) → [`security.md`](./security.md)
 
+### CORS (PR 8 — 프론트 S3 통합)
+- 허용 origin 만 호출 가능. 기본값: 로컬 dev (`http://localhost:3000`, `http://localhost:5173`)
+- 운영은 EC2 `.env` 의 `APP_CORS_ALLOWED_ORIGINS` 환경변수로 S3 endpoint URL 추가
+- 와일드카드(*) 허용 X — `allowCredentials=true` 와 충돌하므로 정확한 URL 만
+- 허용 메서드: GET / POST / PUT / DELETE / OPTIONS
+- 허용 헤더: Authorization / Content-Type / Accept
+- preflight (OPTIONS) 캐시: 3600초
+- 미허용 origin → 403
+
 ---
 
 ## 구현된 API
