@@ -24,7 +24,7 @@
 | 보안 한눈에 — JWT 발급/검증, CORS, 인증/인가 흐름 | [`claude-docs/security.md`](./claude-docs/security.md) |
 | **작업 중 막혔다** — 누가 같은 trap 을 먼저 만났을 수도 | [`claude-docs/troubleshooting.md`](./claude-docs/troubleshooting.md) — T-### 인덱스에서 grep |
 | 코드 짜기 전 컨벤션 / PR 워크플로우 규칙 | [`CLAUDE.md`](./CLAUDE.md) |
-| 운영 일회성 절차 (RDS 데이터 클린업 등) | [`claude-docs/ops-runbooks/`](./claude-docs/ops-runbooks/) |
+| 운영/배포 셋업 절차 (RDS 데이터 클린업, FE S3 배포 가이드 등) | [`claude-docs/ops-runbooks/`](./claude-docs/ops-runbooks/) |
 
 ---
 
