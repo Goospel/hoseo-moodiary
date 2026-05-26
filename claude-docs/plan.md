@@ -2,7 +2,7 @@
 
 > 백엔드 작업 진행 상황과 계획을 한 곳에 모은 문서.
 > **규칙**: PR이 머지될 때마다 갱신. 완료는 `[x]`로 체크, 진행 중이면 간단히 메모.
-> 마지막 갱신: 2026-05-24 (PR #27 release 머지 — 인증 라인 + Post 소유권 운영 반영)
+> 마지막 갱신: 2026-05-26 (PR 8 BE 부분 완료 + 운영 부팅 폭발 대사건 복구 + CD 신뢰성 강화)
 >
 > 📚 **관련 문서**:
 > - [`README.md`](../README.md) — 프로젝트 소개 (외부 공개용)
@@ -116,6 +116,8 @@ PR 4 AI 비동기 응답           (AI 담당자 합의 필요 ⭐⭐⭐)
 
 PR 6 Flyway                  (PR 4 의 AiResponse 스키마와 같이 도입 권장)
 
+PR 9 문서 사이트 (MkDocs)    (GitHub Pages 인프라 위에 풀 docs 통합, 미래)
+
 PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연스러움)
 ```
 
@@ -199,7 +201,30 @@ PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연�
 
 ---
 
-### PR 8 — 프론트엔드 S3 정적 배포 + CORS 통합 🌐 ⭐⭐⭐ (🔄 BE 부분 진행 중)
+### PR 9 — 프로젝트 문서 사이트 (MkDocs Material) 📖 ⭐ (미래)
+**Why**: 이미 GitHub Pages 인프라 (landing + 슬라이드 자동 배포) 가 들어가 있다. 그 위에 `claude-docs/*` + `README.md` 의 markdown 들을 **풀 문서 사이트** 로 통합하면 졸업 심사 / 교수 / 외부 공유 시 "한 페이지에서 모든 것" 보여줄 수 있음.
+
+**구현 후보 — MkDocs Material**:
+- markdown 그대로 + 검색 기능 + 깔끔한 테마 + Mermaid 다이어그램 native 지원
+- 같은 GitHub Pages 인프라 위에 통합 (`deploy-pages.yaml` 확장)
+
+**사이트 구조 안**:
+- `/` — 현재 landing page 유지 또는 MkDocs 의 index 로 통합
+- `/slides/` — Marp 슬라이드 (현재 그대로)
+- `/docs/` — `claude-docs/*` 와 `README.md` 통합 (네비게이션 + 사이드바)
+  - 로드맵 (plan.md)
+  - API 명세 (api-contracts.md)
+  - 보안 (security.md)
+  - 트러블슈팅 (troubleshooting.md)
+  - 운영 runbook (ops-runbooks/)
+
+**의존**: 없음 — Pages 활성화 + Marp 배포가 이미 들어가 있는 상태 (이번 인프라 PR) 면 그 위에 단순 확장
+**예상 소요**: 1-2일 (테마/네비 조정 + 자동 build pipeline)
+**위험**: 작업 부담은 콘텐츠 양에 따라. markdown 그대로 가는 거라 코드 변경 X.
+
+---
+
+### PR 8 — 프론트엔드 S3 정적 배포 + CORS 통합 🌐 ⭐⭐⭐ (✅ BE 부분 완료, FE 답변 대기 중)
 **Why**: 졸업 발표 = "프론트가 떴고 백엔드와 통신해서 일기 작성 / 캘린더 확인 가능" 까지 가야 의미 있는 데모. 현재는 Swagger UI 만으로 발표하는데 시각적 인상 약함.
 
 **설계 결정** (이번 PR 의 의사결정 — [의사결정 로그](#-의사결정-로그) 참조):
@@ -217,30 +242,27 @@ PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연�
 - [x] `CorsConfig` — `CorsConfigurationSource` Bean. allowed origins / methods / headers / credentials 명시
 - [x] `application.yaml` 에 `app.cors.allowed-origins` 외부화 — `APP_CORS_ALLOWED_ORIGINS` env var override
 - [x] `SecurityFilterChain` 에 `.cors(Customizer.withDefaults())` 활성화 — preflight 가 인증 검사 전 통과
-- [ ] (선택) `springdoc.servers` 에 운영 URL 명시 — 후속 PR 로
 - [x] CORS preflight 단위 테스트 4 cases (허용/미허용/localhost/Authorization 헤더 포함)
+- [x] **`compose.yaml` 에 `APP_CORS_ALLOWED_ORIGINS` env 주입 + docker compose `:-` default 패턴** — EC2 `.env` 가 비어 있어도 dev origins 으로 안전 동작 (별도 PR)
+- [ ] (선택) `springdoc.servers` 에 운영 URL 명시 — 후속 PR 로
 
 ---
 
 **인프라 셋업** (BE 담당자가 AWS 콘솔 + CLI 로 1회):
-- [ ] S3 버킷 생성 — 예: `moodiary-frontend`, region `ap-northeast-2`
-- [ ] Static Website Hosting 활성화 → `*.s3-website.ap-northeast-2.amazonaws.com` endpoint URL 받기
-- [ ] 버킷 정책 — Public Read (정적 사이트라 의도된 공개. `s3:GetObject` 만 `*` 에 허용)
-- [ ] 프론트 레포에 GitHub OIDC role 부착 — S3 sync 권한만 (기존 백엔드 OIDC 패턴 재사용)
+- [x] S3 버킷 생성 — 실제: `moodiary-frontend-459338751419-ap-northeast-1-an`, region `ap-northeast-1` (도쿄)
+  - 예상 region (`ap-northeast-2` 서울) 과 다름 — BE/RDS 는 서울, FE S3 는 도쿄. latency 영향은 사용자 → S3 만 도쿄, S3 → BE 호출은 발생 X (브라우저가 직접 BE 콜) 라 미미
+- [ ] Static Website Hosting 활성화 → endpoint URL 받기 (FE 담당자가 1번 단계로 진행, 가이드에 명시)
+- [ ] 버킷 정책 — Public Read (정적 사이트라 의도된 공개. `s3:GetObject` 만 `*` 에 허용) — 가이드의 1-b
+- [ ] 프론트 레포에 GitHub OIDC role 부착 — S3 sync 권한만 (기존 백엔드 OIDC 패턴 재사용) — 가이드의 2-a/2-b/2-c
 
 ---
 
-**프론트 레포 작업** (BE 담당자가 직접 — FE 담당자는 코드만):
-- [ ] 프론트 코드의 API base URL env 합의 — 예: `VITE_API_URL=http://15.165.95.129:8080` (Vite 기준). FE 담당자에게 확인 필요.
-- [ ] `.github/workflows/frontend-cd.yaml` 작성:
-  ```yaml
-  # 대략적 흐름
-  - npm ci
-  - npm run build           # → dist/ 또는 build/ 산출
-  - aws configure ... OIDC
-  - aws s3 sync ./dist s3://moodiary-frontend/ --delete
-  ```
-- [ ] 빌드 산출 디렉토리 확인 (Vite=`dist/`, CRA=`build/`, Next.js static export=`out/`)
+**프론트 레포 작업** — FE 답변 받은 정보 (스택: React + Vite, build: `npm run build`, output: `dist/`)
+- [x] **셋업 가이드 작성 완료** — [`claude-docs/ops-runbooks/frontend-s3-cd-setup.md`](./ops-runbooks/frontend-s3-cd-setup.md) (PR #49). FE 담당자에게 전달해 그쪽이 따라 셋업
+  - S3 버킷 정책 / IAM OIDC role / GitHub Secrets / `frontend-cd.yaml` template / 검증 / 트러블슈팅 8개 섹션
+  - `VITE_API_BASE_URL` 권장 변수명 + 캐시 정책 분리 (hash 박힌 자산 long-cache, index.html short-cache)
+- [ ] **FE 가 가이드 따라 셋업 진행** (외부 대기)
+- [ ] **FE 가 S3 endpoint URL 회신** → BE 가 EC2 `.env` 의 `APP_CORS_ALLOWED_ORIGINS` 갱신 (compose 의 default 는 localhost 만 허용 중)
 
 ---
 
@@ -265,7 +287,7 @@ PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연�
 - S3 버킷 Public Read 설정 시 AWS Block Public Access 기본값 끄는 작업 필요 — 콘솔에서 헷갈리기 쉬움
 
 **운영 머지 전 필수**:
-- [ ] CORS allowed origins 환경변수 → EC2 `.env` 갱신 (외부화 옵션 적용 시)
+- [ ] **FE 가 S3 endpoint URL 회신하면** EC2 `.env` 에 `APP_CORS_ALLOWED_ORIGINS=http://<S3-endpoint>,http://localhost:5173` 추가
 - [ ] S3 버킷 endpoint URL 변경 시 GitHub Secret + EC2 `.env` 동시 갱신
 
 ---
@@ -416,4 +438,8 @@ MYSQL_PWD="$RDS_PASSWORD" mysql -h "$RDS_ENDPOINT" -u "$RDS_USERNAME" moodiary -
 | 2026-05-24 | **인증 라인 완성 + 운영 반영** (release PR #27). PR 0/2-a/2-b/2-c/3 + 인프라 PR 5개 한 번에 main 머지. 백로그에서 PR 0/2/3 제거, PR 4 가 새 핵심 경로 시작점. README.md 신설 연동. |
 | 2026-05-25 | **PR 5 Calendar API 진행 중**. QueryDSL 첫 도입 → `build.gradle` querydsl-jpa compileOnly → implementation 으로 전환(CLAUDE.md trap 갱신). emoji 는 PR 4 의존이라 일단 null. `MissingServletRequestParameterException` → 400 매핑 추가. 테스트 13 cases 추가(전체 66 pass / 1 skip). |
 | 2026-05-25 | **PR 8 (프론트 S3 배포 + CORS) 신설**. 졸업 데모 가시성 확보를 새 핵심 경로로. S3 only / 도메인 X / 프론트 CD 는 BE 담당자가 직접 세팅. 백로그 그래프 갱신 — PR 8 → PR 4 → (PR 5 후속 emoji JOIN). |
+| 2026-05-26 | **PR 8 BE 부분 완료** — `CorsConfig` + `application.yaml` 외부화 + `compose.yaml` env 주입 (`:-default` 패턴으로 함정 회피). FE 셋업 가이드 [`ops-runbooks/frontend-s3-cd-setup.md`](./ops-runbooks/frontend-s3-cd-setup.md) 작성 (PR #49). FE 답변 받음 — React + Vite, `npm run build`, `dist/`. S3 endpoint URL 회신 대기 중. |
+| 2026-05-26 | **운영 부팅 폭발 대사건** ([T-019](./troubleshooting.md#t-019)) — PR #38 CORS 검증 중 발견. 5층 결함 동시 노출: SSM agent 죽음 + CD silent fail + springdoc 2.8.3 ↔ Spring Boot 4 비호환 + ApplicationContext 안전망 부재 + `docker compose` (스페이스) ≠ `docker-compose` (하이픈). 복구: springdoc → 3.0.3, `MoodiaryApplicationTests` `@Disabled` 제거, RDS orphan post 클린업, CD 워크플로우에 SSM `wait command-executed` + health check 추가, image 태그 `:${{ github.sha }}` 함께 push. 옛 CD 들이 사실은 한 번도 자동 deploy 에 성공한 적 없었던 진실까지 드러남. |
+| 2026-05-26 | **Workflow 규칙 일반화** ([T-020](./troubleshooting.md#t-020)) — 머지된 PR 본문을 사후 수정한 사고. CLAUDE.md 의 트리거를 "PR 생성 / 추가 push 전" 만이 아니라 "`gh pr` 으로 시작하는 거의 모든 명령 전" 으로 일반화. T-015 → T-018 → T-020 세 번째 재발. |
+| 2026-05-26 | **GitHub Pages 인프라 신설** — landing page (`site/index.html`) + Marp 슬라이드 자동 배포 (`/slides/`). `main` push 시 GitHub Actions 가 자동 build & deploy. 졸업 심사 / 교수 공유용 단일 URL 확보. 백로그 PR 9 (MkDocs Material 풀 문서 사이트) 신설 — 같은 인프라 위에 `claude-docs/*` 통합 예정. |
 
