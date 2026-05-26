@@ -190,18 +190,72 @@ hoseo.moodiary
 
 ## 🚢 배포
 
-### 운영
+### 운영 아키텍처 (Runtime)
+
+사용자 요청이 어떻게 흐르는지. 점선/회색은 **예정** (PR 4 AI, PR 8 프론트).
+
+```mermaid
+flowchart LR
+    User(["👤 사용자<br/>브라우저"])
+
+    subgraph AWS["AWS ap-northeast-2"]
+        direction LR
+        FE["프론트엔드<br/>S3 정적 호스팅<br/>예정 (PR 8)"]
+        EC2["Spring Boot<br/>Docker on EC2<br/>EIP 15.165.95.129:8080"]
+        RDS[("RDS MySQL<br/>moodiary")]
+        AI["AI 추론 서버<br/>별도 EC2<br/>예정 (PR 4)"]
+    end
+
+    User -->|HTTP UI| FE
+    User -->|HTTP Swagger| EC2
+    FE -.->|fetch API| EC2
+    EC2 -->|JDBC| RDS
+    EC2 -.->|RestClient| AI
+
+    classDef planned stroke-dasharray: 5 5,stroke:#999,color:#666,fill:#f5f5f5
+    class FE,AI planned
+```
+
+### CI/CD 파이프라인
+
+GitHub push → 빌드 → 배포까지. **dev 머지 = CI 만**, **main 머지 = CD 가 자동 배포**.
+
+```mermaid
+flowchart TB
+    Dev(["👨‍💻 개발자"])
+
+    Dev -->|"PR → dev"| PR1[dev 브랜치]
+    Dev -->|"PR → main"| PR2[main 브랜치]
+
+    PR1 --> CI["GitHub Actions<br/>moodiary-be-ci.yaml<br/>./gradlew build"]
+    CI --> Merge1["dev 머지 가능"]
+
+    PR2 --> CD["GitHub Actions<br/>moodiary-be-cd.yaml"]
+    CD --> DH["🐳 Docker Hub<br/>hoseo-moodiary-linux:latest"]
+    CD --> SSM["AWS SSM<br/>send-command"]
+    SSM -->|"compose.yaml pull<br/>docker compose up -d"| EC2["🚢 EC2<br/>컨테이너 재기동"]
+    DH -.->|"docker compose pull"| EC2
+
+    classDef trigger fill:#fff3e0,stroke:#f57c00
+    classDef aws fill:#fff8e1,stroke:#ff8f00
+    class CI,CD trigger
+    class DH,SSM,EC2 aws
+```
+
+### 운영 인프라 요약
 | 환경 | 위치 | 비고 |
 |---|---|---|
-| 애플리케이션 | AWS EC2 + Docker, Amazon Linux 2023 | Elastic IP `15.165.95.129` |
-| DB | AWS RDS MySQL | 자격증명은 GitHub Secrets + EC2 `.env` |
-| 이미지 | Docker Hub (`<owner>/hoseo-moodiary-linux:latest`) | |
+| 애플리케이션 | AWS EC2 + Docker (Amazon Linux 2023) | Elastic IP `15.165.95.129` |
+| DB | AWS RDS MySQL | 자격증명은 GitHub Secrets + EC2 `.env` 이중 관리 |
+| 이미지 | Docker Hub (`<owner>/hoseo-moodiary-linux:latest`) | CD 가 push, SSM 이 pull |
+| 배포 자동화 | GitHub Actions (OIDC) → AWS SSM `send-command` | SSH 키 관리 불필요 |
+| 컨테이너 자동 기동 | `compose.yaml` 의 `restart: unless-stopped` + `pull_policy: always` | EC2 재부팅 시 자동 복구 |
 
-### CI / CD
+### CI / CD 트리거
 | 트리거 | 워크플로우 | 동작 |
 |---|---|---|
 | `PR → dev` | `moodiary-be-ci.yaml` | `./gradlew build` → 테스트 리포트 artifact 업로드 |
-| `push → main` | `moodiary-be-cd.yaml` | 빌드 → Docker Hub push → AWS SSM 으로 EC2 에 `docker run` |
+| `push → main` | `moodiary-be-cd.yaml` | 빌드 → Docker Hub push → AWS SSM 으로 EC2 에 `docker compose pull/up -d` |
 
 ### 운영 환경변수 (컨테이너 주입)
 - `SPRING_DATASOURCE_URL` / `_USERNAME` / `_PASSWORD` — RDS
