@@ -116,6 +116,8 @@ PR 4 AI 비동기 응답           (AI 담당자 합의 필요 ⭐⭐⭐)
 
 PR 6 Flyway                  (PR 4 의 AiResponse 스키마와 같이 도입 권장)
 
+PR 9 문서 사이트 (MkDocs)    (GitHub Pages 인프라 위에 풀 docs 통합, 미래)
+
 PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연스러움)
 ```
 
@@ -196,6 +198,29 @@ PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연�
 - [ ] CloudWatch 로그 통합
 
 **예상 소요**: 1주 | **의존**: PR 1 권장 (compose 통일된 상태가 옮기기 쉬움) | **위험**: 비용 증가, 학부 졸업프로젝트 범위 초과 가능
+
+---
+
+### PR 9 — 프로젝트 문서 사이트 (MkDocs Material) 📖 ⭐ (미래)
+**Why**: 이미 GitHub Pages 인프라 (landing + 슬라이드 자동 배포) 가 들어가 있다. 그 위에 `claude-docs/*` + `README.md` 의 markdown 들을 **풀 문서 사이트** 로 통합하면 졸업 심사 / 교수 / 외부 공유 시 "한 페이지에서 모든 것" 보여줄 수 있음.
+
+**구현 후보 — MkDocs Material**:
+- markdown 그대로 + 검색 기능 + 깔끔한 테마 + Mermaid 다이어그램 native 지원
+- 같은 GitHub Pages 인프라 위에 통합 (`deploy-pages.yaml` 확장)
+
+**사이트 구조 안**:
+- `/` — 현재 landing page 유지 또는 MkDocs 의 index 로 통합
+- `/slides/` — Marp 슬라이드 (현재 그대로)
+- `/docs/` — `claude-docs/*` 와 `README.md` 통합 (네비게이션 + 사이드바)
+  - 로드맵 (plan.md)
+  - API 명세 (api-contracts.md)
+  - 보안 (security.md)
+  - 트러블슈팅 (troubleshooting.md)
+  - 운영 runbook (ops-runbooks/)
+
+**의존**: 없음 — Pages 활성화 + Marp 배포가 이미 들어가 있는 상태 (이번 인프라 PR) 면 그 위에 단순 확장
+**예상 소요**: 1-2일 (테마/네비 조정 + 자동 build pipeline)
+**위험**: 작업 부담은 콘텐츠 양에 따라. markdown 그대로 가는 거라 코드 변경 X.
 
 ---
 
@@ -415,5 +440,6 @@ MYSQL_PWD="$RDS_PASSWORD" mysql -h "$RDS_ENDPOINT" -u "$RDS_USERNAME" moodiary -
 | 2026-05-25 | **PR 8 (프론트 S3 배포 + CORS) 신설**. 졸업 데모 가시성 확보를 새 핵심 경로로. S3 only / 도메인 X / 프론트 CD 는 BE 담당자가 직접 세팅. 백로그 그래프 갱신 — PR 8 → PR 4 → (PR 5 후속 emoji JOIN). |
 | 2026-05-26 | **PR 8 BE 부분 완료** — `CorsConfig` + `application.yaml` 외부화 + `compose.yaml` env 주입 (`:-default` 패턴으로 함정 회피). FE 셋업 가이드 [`ops-runbooks/frontend-s3-cd-setup.md`](./ops-runbooks/frontend-s3-cd-setup.md) 작성 (PR #49). FE 답변 받음 — React + Vite, `npm run build`, `dist/`. S3 endpoint URL 회신 대기 중. |
 | 2026-05-26 | **운영 부팅 폭발 대사건** ([T-019](./troubleshooting.md#t-019)) — PR #38 CORS 검증 중 발견. 5층 결함 동시 노출: SSM agent 죽음 + CD silent fail + springdoc 2.8.3 ↔ Spring Boot 4 비호환 + ApplicationContext 안전망 부재 + `docker compose` (스페이스) ≠ `docker-compose` (하이픈). 복구: springdoc → 3.0.3, `MoodiaryApplicationTests` `@Disabled` 제거, RDS orphan post 클린업, CD 워크플로우에 SSM `wait command-executed` + health check 추가, image 태그 `:${{ github.sha }}` 함께 push. 옛 CD 들이 사실은 한 번도 자동 deploy 에 성공한 적 없었던 진실까지 드러남. |
-| 2026-05-26 | **Workflow 규칙 일반화** ([T-020](./troubleshooting.md#t-020)) — 머지된 PR 본문을 사후 수정한 사고. CLAUDE.md 의 트리거를 \"PR 생성 / 추가 push 전\" 만이 아니라 \"`gh pr` 으로 시작하는 거의 모든 명령 전\" 으로 일반화. T-015 → T-018 → T-020 세 번째 재발. |
+| 2026-05-26 | **Workflow 규칙 일반화** ([T-020](./troubleshooting.md#t-020)) — 머지된 PR 본문을 사후 수정한 사고. CLAUDE.md 의 트리거를 "PR 생성 / 추가 push 전" 만이 아니라 "`gh pr` 으로 시작하는 거의 모든 명령 전" 으로 일반화. T-015 → T-018 → T-020 세 번째 재발. |
+| 2026-05-26 | **GitHub Pages 인프라 신설** — landing page (`site/index.html`) + Marp 슬라이드 자동 배포 (`/slides/`). `main` push 시 GitHub Actions 가 자동 build & deploy. 졸업 심사 / 교수 공유용 단일 URL 확보. 백로그 PR 9 (MkDocs Material 풀 문서 사이트) 신설 — 같은 인프라 위에 `claude-docs/*` 통합 예정. |
 
