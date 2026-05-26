@@ -278,7 +278,7 @@ http
 | **JWT 무효화 안 됨** | 로그아웃해도 만료 전까지 토큰 유효. 분실 시 24h 까지 노출 | Redis 블랙리스트 또는 짧은 만료 + refresh |
 | **Rate limiting 없음** | `/auth/login` 으로 비밀번호 무차별 대입 가능 | Spring Cloud Gateway, nginx limit_req, 또는 Bucket4j |
 | **비밀번호 정책 약함** | 특수문자 강제 X, 8자 (NIST 권장 따른 절충) | 정규식 강화. 단 너무 빡세면 UX 손상 |
-| **CORS 없음** | 현재 외부 origin 호출 차단되어 있음 (Same-Origin Policy 가 막음) | PR 8 에서 도입 — S3 endpoint + localhost 허용 |
+| ~~CORS 없음~~ → **CORS 도입됨 (PR 8)** | 허용 origin 만 호출 가능. 운영은 EC2 `.env` 의 `APP_CORS_ALLOWED_ORIGINS` 로 관리. 와일드카드 X (allowCredentials=true 와 충돌) | OK |
 | **JWT secret 회전 자동화 X** | 의심 사고 시 수동으로 .env 갱신 + 재배포 | AWS Secrets Manager + 주기적 회전 |
 | **로그에 토큰 흘릴 위험** | 디버그 로그 추가 시 실수로 토큰/비번 찍을 가능 | 현재는 그런 로그 없음. Logback config 에 마스킹 패턴 |
 | **CSRF disabled** | 의도된 — JWT 헤더 인증은 CSRF 영향 없음 | OK (쿠키 인증 도입 시 재검토) |
