@@ -1,0 +1,97 @@
+# GitHub Pages 자동 배포.
+#
+# 결과 URL: https://goospel.github.io/hoseo-moodiary/
+#   - /            → site/index.html (landing page)
+#   - /slides/     → presentation/moodiary-be-presentation.md 를 Marp HTML 로 변환
+#
+# 트리거:
+#   - main push 시 site/** 또는 presentation/** 변경된 경우만
+#   - 또는 GitHub UI 에서 수동 실행 (workflow_dispatch)
+#
+# 사전 셋업 (한 번만):
+#   Repo Settings → Pages → Source = "GitHub Actions"
+#
+# 작동 방식:
+#   modern 방식 (gh-pages branch 안 만듦). actions/upload-pages-artifact + deploy-pages.
+
+name: Deploy GitHub Pages (landing + slides)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'presentation/**'
+      - '.github/workflows/deploy-pages.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Pages 배포는 동시에 하나만. 새 deploy 시작되면 이전 건 중단되지 않고 끝까지 완주.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build site (landing + Marp slides)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Marp CLI
+        run: npm install -g @marp-team/marp-cli@latest
+
+      - name: Build site
+        run: |
+          set -euo pipefail
+
+          # 1) landing page (site/) 를 _site/ 루트로 복사
+          mkdir -p _site
+          cp -r site/* _site/
+
+          # 2) Marp 슬라이드 → _site/slides/index.html
+          mkdir -p _site/slides
+          marp presentation/moodiary-be-presentation.md \
+            --html \
+            --allow-local-files \
+            -o _site/slides/index.html
+
+          # 3) PDF 도 다운로드용으로 — chromium 필요. 실패해도 전체 빌드 fail 안 하게.
+          marp presentation/moodiary-be-presentation.md \
+            --pdf \
+            --allow-local-files \
+            -o _site/slides/moodiary-be-presentation.pdf \
+          || echo "::warning::PDF build failed (chromium issue?). HTML 만 deploy 됨."
+
+          echo "::group::Built site tree"
+          ls -la _site/
+          ls -la _site/slides/
+          echo "::endgroup::"
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
