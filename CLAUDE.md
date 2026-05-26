@@ -38,7 +38,7 @@ Moodiary 는 다이어리/무드 트래킹 애플리케이션을 위한 Spring B
 - 계획: Flyway 도입 (PR 6) 시점에 `validate` 로 전환. 그 전까지는 `ddl-auto` 를 함부로 바꾸지 마라.
 
 ## CI/CD 메모
-트리거 표 + 시크릿 목록은 [README "배포"](./README.md). Claude 가 기억해야 할 한 가지: `main` 의 CD 경로 = GitHub Actions → Docker Hub → AWS SSM → EC2 `docker compose` (compose.yaml 은 저장소 루트, SSM 이 배포 시 pull 한다). compose 에 새 환경변수가 추가되면 **GitHub Secrets 와 EC2 `.env` 양쪽** 을 모두 업데이트해야 한다.
+트리거 표 + 시크릿 목록은 [README "배포"](./README.md). Claude 가 기억해야 할 한 가지: `main` 의 CD 경로 = GitHub Actions → Docker Hub → AWS SSM → EC2 `docker-compose` (compose.yaml 은 저장소 루트, SSM 이 배포 시 pull 한다). 명령은 **`docker-compose` (하이픈)** — EC2 환경 의존, T-023 참조. compose 에 새 환경변수가 추가되면 **GitHub Secrets 와 EC2 `.env` 양쪽** 을 모두 업데이트해야 한다.
 
 ## Workflow 규칙 (Claude 가 반드시 읽는다)
 
