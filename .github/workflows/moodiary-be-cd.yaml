@@ -4,13 +4,18 @@
 #   1) gradle build (테스트 포함)
 #   2) Docker image build + push (latest + commit sha 양쪽 태그)
 #   3) AWS OIDC 자격증명
-#   4) SSM 으로 EC2 에서 `docker compose pull && up -d` 실행
+#   4) SSM 으로 EC2 에서 `docker-compose pull && up -d` 실행
 #      — send-command → command-id 받고 → wait 로 실제 종료까지 대기 → status=Success 확인.
 #        (T-019: 옛 워크플로우는 send-command 의 enqueue 응답만 받고 "성공" 으로 끝나 SSM 죽음을 못 잡았다.)
 #   5) Health check — EC2 에서 swagger 200 polling. 컨테이너 부팅 실패를 CD 단계에서 잡는다.
 #
 # 롤백: Docker Hub 에 `:latest` + `:<commit-sha>` 둘 다 push 하므로 EC2 .env 의 image 태그를
-#       `:<옛 commit-sha>` 로 바꾸고 `docker compose up -d` 하면 즉시 옛 버전으로 복귀 가능.
+#       `:<옛 commit-sha>` 로 바꾸고 `docker-compose up -d` 하면 즉시 옛 버전으로 복귀 가능.
+#
+# 왜 `docker-compose` (하이픈) 인가 — EC2 에는 standalone `docker-compose` v2 binary 만 있고
+# `docker compose` (스페이스, plugin 형식) 는 등록되지 않은 상태. `docker compose` 로 쓰면 EC2 가
+# `compose` 를 unknown sub-command 로 처리해 즉시 fail (T-023). 만약 미래에 docker compose
+# plugin 을 EC2 에 설치하면 둘 다 동작 — 그때 통일.
 
 name: CD - Build and Push Docker Image
 
@@ -86,13 +91,13 @@ jobs:
           role-to-assume: ${{ secrets.AWS_GITHUB_OIDC_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # SSM 으로 EC2 에서 docker compose pull && up -d.
+      # SSM 으로 EC2 에서 docker-compose pull && up -d.
       # 옛 워크플로우와 핵심 차이:
       #   - send-command 의 응답에서 CommandId 를 capture
       #   - wait command-executed 로 *실제 종료 상태* 까지 대기
       #   - get-command-invocation 의 Status 가 "Success" 가 아니면 명시적 exit 1
       # → SSM agent 가 죽었거나 EC2 에서 docker pull 이 실패하면 CD 가 fail 로 떨어진다 (T-019 방어).
-      - name: Deploy to EC2 via SSM (docker compose pull + up)
+      - name: Deploy to EC2 via SSM (docker-compose pull + up)
         env:
           INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -107,8 +112,8 @@ jobs:
             --parameters 'commands=[
               "cd /home/ec2-user",
               "curl -sfL https://raw.githubusercontent.com/Goospel/hoseo-moodiary/main/compose.yaml -o compose.yaml",
-              "docker compose pull",
-              "docker compose up -d"
+              "docker-compose pull",
+              "docker-compose up -d"
             ]' \
             --region "$AWS_REGION" \
             --query "Command.CommandId" \

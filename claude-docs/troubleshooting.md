@@ -9,7 +9,7 @@
 > - 단순 오타 / 개인 IDE 문제는 skip.
 > - 항목 schema: **증상 / 원인 / 해결 / 시점 / 교훈**.
 >
-> 마지막 갱신: 2026-05-26 (대사건 정리 — T-019 보강 + T-021/T-022 신설 + 상단 navigator)
+> 마지막 갱신: 2026-05-26 (T-023 추가 — `docker compose` 스페이스 vs 하이픈 + 옛 CD 들의 silent fail 진실)
 
 ---
 
@@ -24,6 +24,7 @@ CORS 운영 검증 (PR #38) 직후 컨테이너 restart loop → 표면은 "CORS
 | 3 (코드) | 운영 첫 부팅에서 잠재 결함 동시 폭발 — springdoc 2.8.3 ↔ Spring Boot 4 비호환 + Post→User FK orphan 데이터 | [T-019](#t-019) |
 | 4 (테스트) | `@SpringBootTest` 가 `@Disabled` 라 운영 부팅 폭발이 빌드 단계에서 안 잡힘 | [T-019](#t-019) |
 | 5 (배포 인지) | dev 머지만으로 운영 도달한다고 가정 / `docker compose pull` 만 돌리면 새 image 가 받아져 온다고 가정 | [T-021](#t-021), [T-022](#t-022) |
+| 6 (CD 명령) | 워크플로우의 `docker compose` (스페이스) 가 EC2 에서 unknown — 옛 CD 들은 silent fail 로 가려져 있었음 → PR #45 의 wait/verify 가 비로소 노출 | [T-023](#t-023) |
 
 **핵심 진단 휴리스틱** — 운영이 이상하면 표면 증상부터 보지 말고:
 1. `docker ps` — 컨테이너 살아있나?
@@ -55,6 +56,7 @@ CORS 운영 검증 (PR #38) 직후 컨테이너 restart loop → 표면은 "CORS
 - [T-020](#t-020) **T-018 재발 (3번째)** — 머지된 PR 의 본문을 사후 수정 / Workflow 규칙의 트리거 범위가 `gh pr edit` 같은 메타데이터 변경을 안 다뤘던 회색 지대
 - [T-021](#t-021) **dev 머지 ≠ 운영 도달** — CD 트리거가 `main` push 인데 dev 까지만 머지하고 운영 검증 시도 → Docker Hub `latest` 가 여전히 옛 image
 - [T-022](#t-022) **`docker compose pull` ≠ 새 image 보장** — Docker Hub `latest` 가 갱신되지 않으면 EC2 에서 pull 해도 동일 sha. 운영 deploy 가 진짜 일어났는지의 판별은 `docker inspect .Created` 시각
+- [T-023](#t-023) **`docker compose` (스페이스) vs `docker-compose` (하이픈)** — EC2 에는 standalone binary 만 등록되어 `docker compose` 가 unknown sub-command 로 즉시 fail. 옛 CD 들은 silent fail 로 가려져 있었고, PR #45 의 wait/verify 가 처음으로 이를 노출
 
 ### AWS / 운영 인프라
 - [T-006](#t-006) EC2 stop/start 시 퍼블릭 IP가 매번 바뀜 → GitHub Secret 갱신 지옥
@@ -259,6 +261,17 @@ CORS 운영 검증 (PR #38) 직후 컨테이너 restart loop → 표면은 "CORS
 | **해결** | **시도 → 평가:**<br><br>**(O) 옳았던 것**:<br>① `docker inspect ... .Created` 시각으로 image 갱신 여부를 명시적으로 확인 — 사용자에게 "Created 시각이 머지 시각 이후인지 보라" 라고 안내한 게 시나리오 A/B/C 를 5초 만에 가른 결정타.<br>② Docker Hub 의 image 가 안 바뀐 진짜 원인 ([T-021](#t-021): release PR 미머지) 으로 거슬러 올라감 — EC2 의 docker 동작을 더 깊이 파지 않고 한 단계 위 (CD 트리거) 의 원인으로 정확히 점프.<br><br>**(X) 옳지 않았던 것**:<br>① 처음에 사용자에게 "수동 fallback: `docker compose pull && up -d`" 를 안내할 때 **Docker Hub 가 새 image 를 push 받기 전이라는 사전 조건을 명시 안 함**. 사용자가 그 조건이 충족됐다고 가정하고 명령만 돌리니 시간만 낭비. 안내에는 항상 사전 조건도 함께. |
 | **시점** | PR #40 머지 후 운영 검증 시도 — 2026-05-26 |
 | **교훈** | **1. `docker compose pull` 은 "Docker Hub 가 새 image 를 갖고 있을 때만" 새 image 를 가져온다**<br>로컬에서 `pull` 명령이 0 byte 다운로드로 즉시 끝나면 registry 의 image 가 변경되지 않은 것. 다른 진단 명령:<br>&nbsp;&nbsp;```bash<br>&nbsp;&nbsp;# Docker Hub 의 latest 의 sha digest 확인<br>&nbsp;&nbsp;docker manifest inspect <user>/<image>:latest | grep -i digest<br>&nbsp;&nbsp;# 로컬 image sha 와 비교<br>&nbsp;&nbsp;docker inspect <image>:latest --format '{{.Id}}'<br>&nbsp;&nbsp;```<br><br>**2. 운영 deploy 검증의 표준 한 줄: `docker inspect ... .Created`**<br>이번 사고의 진단 핵심이었다. Created 시각이 마지막 main 머지 시각 *이후* 면 새 image, *이전* 이면 새 image 가 EC2 에 도달 못 한 상태 — 어느 단계에서 끊겼는지 (CD silent fail / Docker Hub push 실패 / SSM 실행 실패) 를 별도로 진단. [T-019](#t-019) 의 교훈 #7 도 동일.<br><br>**3. 명령 안내에는 사전 조건도 함께**<br>"수동 fallback: `docker compose pull && up -d`" 같은 안내는 사용자에게 명확하지만, 그 명령이 의미 있으려면 Docker Hub 의 image 가 새로 push 된 상태여야 한다는 사전 조건이 있다. 안내문에 사전 조건을 함께 박아라 — "Docker Hub 의 `latest` 가 갱신된 후 (= CD 가 성공한 후) `docker compose pull && up -d`". |
+
+<a id="t-023"></a>
+### T-023 · `docker compose` (스페이스) vs `docker-compose` (하이픈) — 옛 CD 들의 silent fail 진실
+
+| | |
+|---|---|
+| **증상** | PR #45 (CD 신뢰성 강화) 가 main 에 들어간 후 첫 release 인 PR #46 의 CD 가 **1분 9초 만에 fail**. GitHub Actions 로그:<br>&nbsp;&nbsp;```<br>&nbsp;&nbsp;CommandId: 00d06e9a-3737-4fb2-a5b7-721b2d5c6245<br>&nbsp;&nbsp;Wait for SSM execution<br>&nbsp;&nbsp;aws: [ERROR]: Waiter CommandExecuted failed:<br>&nbsp;&nbsp;  For expression "Status" we matched expected path: "Failed"<br>&nbsp;&nbsp;```<br>SSM 명령이 EC2 에 도달은 했으나 (CommandId 받음 = SSM agent 살아있음) 실행 자체가 1.5초 만에 Failed. |
+| **원인** | 워크플로우의 `docker compose pull` / `docker compose up -d` (스페이스, Docker Compose v2 plugin 형식) 가 EC2 에서 **unknown sub-command**. EC2 의 `docker compose --version` 출력이 `Docker version 25.0.14` (= `compose` 가 인식 안 돼서 `docker --version` 으로 fallback) 였다.<br><br>EC2 에는 **standalone `docker-compose` v2 binary 만 있고** docker plugin 으로는 등록 안 된 상태. 즉 `docker-compose` (하이픈) 은 동작, `docker compose` (스페이스) 는 fail.<br><br>**더 큰 진실** — 옛 워크플로우도 `docker compose` (스페이스) 였다. 그러면 옛 CD 들도 모두 SSM 단계에선 같은 unknown sub-command 로 fail 했을 것. 그런데 GitHub Actions 는 success 표시 — `aws ssm send-command` 가 enqueue 응답만 받고 끝났기 때문 ([T-019](#t-019) 의 silent fail). **즉 옛 CD 의 자동 deploy 는 한 번도 진짜로 작동한 적이 없었다.** 운영 image 갱신은 모두 사용자가 SSH 로 들어가 수동 `docker-compose pull && up -d` 돌렸을 때만. PR #45 의 wait/verify 가 이 진실을 처음으로 노출. |
+| **해결** | **시도 → 평가:**<br><br>**(O) 옳았던 것**:<br>① 사용자에게 "1번~4번 명령을 직접 EC2 에서 한 줄씩 돌려봐" 하고 segment 별 진단을 부탁한 점 — 어디서 fail 하는지 격리해 `docker compose` vs `docker-compose` 차이를 빠르게 찾아냄.<br>② `docker compose --version` 출력 (`Docker version 25.0.14` 만 나옴) 한 줄로 확정 — `compose` sub-command 미등록의 결정적 증거.<br>③ PR #45 의 wait/verify 가 이 silent fail 을 진짜로 드러낸 것 자체가 가치 있는 일임을 짚어둠 — CD fail 떨어진 게 사고가 아니라 **방어선이 의도대로 작동한 결과**.<br>④ fix 는 워크플로우만 한 줄 (`docker compose` → `docker-compose`) 로 끝낼 수 있는 가장 작은 변경 — EC2 환경 변경 (plugin 설치) 같은 더 큰 일은 별도 PR 로.<br>⑤ README / CLAUDE.md / compose.yaml 의 명령 예시도 같이 통일 — 다음 사람이 두 형식 보고 헷갈리지 않게.<br><br>**(X) 옳지 않았던 것**:<br>① PR #45 작성 시 EC2 의 docker compose plugin 등록 여부를 확인하지 않음. 옛 워크플로우의 `docker compose` 를 무비판적으로 복사 — 그게 실제로는 옛 환경에서도 fail 하고 있었음을 의심 안 함. CD 신뢰성 PR 의 본질이 "옛 동작 그대로 두지 말고 의심부터" 인데, 정작 명령 자체는 옛 것을 그대로 둔 모순.<br>② 옛 CD 들이 "성공" 으로 끝났던 게 silent fail 의 결과일 수 있다는 가능성을 PR #45 단계에서는 충분히 고려 안 함. T-019 의 교훈에 "옛 deploy 가 실제로 EC2 에 도달한 적 있는지 모른다" 라고 적혀 있었음에도, 그게 명령 자체의 invalid 까지 의심하게 만들진 못함. |
+| **시점** | PR #46 release CD 첫 실행 (PR #45 의 wait/verify 가 처음 작동한 시점) — 2026-05-26 |
+| **교훈** | **1. 옛 명령이 "이미 동작 중이니까 OK" 라는 가정은 silent fail 환경에선 무효**<br>"이전에 잘 됐다" 는 증거가 안 된다 — 그 "성공" 자체가 가짜였을 수 있다. CD 신뢰성을 강화하는 PR 은 **명령 자체의 validity 도 같이 검증**해야 한다. 옛 명령을 그대로 두지 말고 한 번씩 다 의심.<br><br>**2. `docker compose` (스페이스, Docker CLI plugin) ≠ `docker-compose` (standalone binary)**<br>- `docker compose <cmd>` = `docker` 명령의 sub-command 형태. Docker Engine 의 plugin 폴더 (`~/.docker/cli-plugins/docker-compose` 또는 system-wide) 에 binary 가 등록되어 있어야 작동.<br>- `docker-compose <cmd>` = standalone binary. PATH 에만 있으면 작동.<br>- 둘 다 같은 compose v2 일 수도 있지만 등록 위치가 다르다. **환경에서 어느 쪽이 살아있는지 확인 명령**:<br>&nbsp;&nbsp;```bash<br>&nbsp;&nbsp;docker compose version    # "Docker Compose version v2.x.x" 가 나오면 plugin OK<br>&nbsp;&nbsp;docker-compose --version  # standalone OK 여부<br>&nbsp;&nbsp;```<br>&nbsp;&nbsp;`docker compose --version` 이 `Docker version ...` 로 응답하면 plugin 등록 안 됨.<br><br>**3. SSM 의 silent fail 은 명령의 invalid 까지 가린다**<br>`aws ssm send-command` 의 enqueue 응답이 success 라는 건 *명령이 큐에 들어갔다* 는 의미일 뿐, 그 명령이 valid 인지조차 검증하지 않는다. T-019 의 wait/verify (PR #45) 가 들어와야 비로소 invalid 명령 / 실행 실패가 GitHub Actions 로 흘러나옴. **CD 신뢰성 강화는 invalid 명령 발견의 첫 단계** — 이번 PR 직후 더 많은 latent 결함이 노출될 수 있다고 가정.<br><br>**4. CD fail 떨어진 것 자체에 당황하지 말 것**<br>새 방어선이 들어간 직후 CD fail = 방어선이 잡아준 것 = **성공의 신호**. 진짜 사고는 그 fail 의 진단을 게을리하거나, "옛날엔 됐는데" 라며 방어선을 무력화시킬 때 시작된다.<br><br>**5. 같은 의미의 두 명령이 환경에 따라 호환 안 되는 경우, 문서/명령 전부를 한 형식으로 통일**<br>이번 fix 의 부수 작업: README, CLAUDE.md, compose.yaml, workflow 의 `docker compose` 전부를 `docker-compose` 로 통일. 두 형식을 섞으면 다음 사람 (또는 미래의 자신) 이 또 같은 trap. |
 
 ---
 

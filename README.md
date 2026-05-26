@@ -248,8 +248,8 @@ flowchart TB
     PR2 --> CD["GitHub Actions<br/>moodiary-be-cd.yaml"]
     CD --> DH["🐳 Docker Hub<br/>hoseo-moodiary-linux:latest"]
     CD --> SSM["AWS SSM<br/>send-command"]
-    SSM -->|"compose.yaml pull<br/>docker compose up -d"| EC2["🚢 EC2<br/>컨테이너 재기동"]
-    DH -.->|"docker compose pull"| EC2
+    SSM -->|"compose.yaml pull<br/>docker-compose up -d"| EC2["🚢 EC2<br/>컨테이너 재기동"]
+    DH -.->|"docker-compose pull"| EC2
 
     classDef trigger fill:#fff3e0,stroke:#f57c00
     classDef aws fill:#fff8e1,stroke:#ff8f00
@@ -270,7 +270,7 @@ flowchart TB
 | 트리거 | 워크플로우 | 동작 |
 |---|---|---|
 | `PR → dev` | `moodiary-be-ci.yaml` | `./gradlew build` → 테스트 리포트 artifact 업로드 |
-| `push → main` | `moodiary-be-cd.yaml` | 빌드 → Docker Hub push → AWS SSM 으로 EC2 에 `docker compose pull/up -d` |
+| `push → main` | `moodiary-be-cd.yaml` | 빌드 → Docker Hub push → AWS SSM 으로 EC2 에 `docker-compose pull/up -d` |
 
 ### 운영 환경변수 (컨테이너 주입)
 - `SPRING_DATASOURCE_URL` / `_USERNAME` / `_PASSWORD` — RDS
