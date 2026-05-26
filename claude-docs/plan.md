@@ -217,8 +217,9 @@ PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연�
 - [x] `CorsConfig` — `CorsConfigurationSource` Bean. allowed origins / methods / headers / credentials 명시
 - [x] `application.yaml` 에 `app.cors.allowed-origins` 외부화 — `APP_CORS_ALLOWED_ORIGINS` env var override
 - [x] `SecurityFilterChain` 에 `.cors(Customizer.withDefaults())` 활성화 — preflight 가 인증 검사 전 통과
-- [ ] (선택) `springdoc.servers` 에 운영 URL 명시 — 후속 PR 로
 - [x] CORS preflight 단위 테스트 4 cases (허용/미허용/localhost/Authorization 헤더 포함)
+- [x] **`compose.yaml` 에 `APP_CORS_ALLOWED_ORIGINS` env 주입 + docker compose `:-` default 패턴** — EC2 `.env` 가 비어 있어도 dev origins 으로 안전 동작 (별도 PR)
+- [ ] (선택) `springdoc.servers` 에 운영 URL 명시 — 후속 PR 로
 
 ---
 
@@ -265,7 +266,7 @@ PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연�
 - S3 버킷 Public Read 설정 시 AWS Block Public Access 기본값 끄는 작업 필요 — 콘솔에서 헷갈리기 쉬움
 
 **운영 머지 전 필수**:
-- [ ] CORS allowed origins 환경변수 → EC2 `.env` 갱신 (외부화 옵션 적용 시)
+- [ ] **FE 가 S3 endpoint URL 회신하면** EC2 `.env` 에 `APP_CORS_ALLOWED_ORIGINS=http://<S3-endpoint>,http://localhost:5173` 추가
 - [ ] S3 버킷 endpoint URL 변경 시 GitHub Secret + EC2 `.env` 동시 갱신
 
 ---
