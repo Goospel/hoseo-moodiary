@@ -39,10 +39,17 @@ dependencies {
 	testImplementation 'org.springframework.security:spring-security-test'
 	testCompileOnly 'org.projectlombok:lombok'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	// MoodiaryApplicationTests (full ApplicationContext 부팅 안전망) 의 DataSource 대체.
+	// 운영은 MySQL/RDS, 테스트는 H2 in-memory — MySQL 모드로 띄워 SQL 방언 차이 최소화.
+	testRuntimeOnly 'com.h2database:h2'
 	testAnnotationProcessor 'org.projectlombok:lombok'
 
 	// Swagger (SpringDoc OpenAPI)
-	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.3'
+	// - 3.0.x = Spring Boot 4.x 호환 라인. 2.x 는 Spring Boot 3.x 전용으로 굳었다.
+	// - 2.8.3 으로 부팅 시 `QuerydslPredicateOperationCustomizer` → `TypeInformation` 클래스 위치 변경 비호환
+	//   으로 `NoClassDefFoundError` 가 떨어진다 (단위 테스트는 통과, 운영 부팅에서만 폭발).
+	//   재현 안전망: `MoodiaryApplicationTests.contextLoads()`.
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3'
 
 	// JWT (jjwt) — io.jsonwebtoken
 	implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
