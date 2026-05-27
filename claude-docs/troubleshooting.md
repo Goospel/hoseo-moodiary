@@ -9,7 +9,7 @@
 > - 단순 오타 / 개인 IDE 문제는 skip.
 > - 항목 schema: **증상 / 원인 / 해결 / 시점 / 교훈**.
 >
-> 마지막 갱신: 2026-05-27 (T-025, T-026 추가 — worktree Agent 의 절대경로 main repo 오염 risk / PowerShell 5.1 here-string + 한글 commit 메시지 깨짐)
+> 마지막 갱신: 2026-05-27 (T-027 추가 — worktree 디렉토리가 `git add -A` 로 main repo 에 submodule reference 로 commit 되는 함정)
 
 ---
 
@@ -60,6 +60,7 @@ CORS 운영 검증 (PR #38) 직후 컨테이너 restart loop → 표면은 "CORS
 - [T-024](#t-024) **Actions / Pages / CD 워크플로우가 "Set up job" 또는 액션 download 에서 즉시 fail** → 코드/액션 버전 의심 전에 [githubstatus.com](https://www.githubstatus.com/) 부터. 재실행해도 같은 SHA 로 같은 에러가 나면 인프라 incident 가 지속 중인 신호 — 액션 메이저 버전 deprecated 로 잘못 점프하기 쉬운 함정
 - [T-025](#t-025) **Worktree Agent (isolation: worktree) 가 절대 경로 도구로 main repo 를 오염시킬 risk** — Agent 의 cwd 는 worktree 인데 Edit/Write 가 받는 절대 경로는 main repo 를 가리킬 수 있음. main repo 에 uncommitted 변경이 있을 때 호출하면 진짜 손실. Agent 위임 시 worktree path 를 prompt 에 박고, 호출 전 main repo `git status` 깨끗하게.
 - [T-026](#t-026) **PowerShell 5.1 here-string (`@'...'@`) + 한글/특수문자 commit 메시지 → `git commit -m` 의 pathspec 에러** — 본문의 특정 토큰이 git 인자로 잘못 파싱. 해결은 `-m` 대신 `git commit -F tempfile.txt` (UTF-8 BOM 없이 인코딩).
+- [T-027](#t-027) **`git add -A` 가 worktree 디렉토리 (`.claude/worktrees/agent-<id>`) 를 main repo 에 submodule reference (mode 160000) 로 commit** — worktree 가 자기 `.git` 가진 별도 repo 라 git 이 nested repo 로 인식. 사전 방어: `.gitignore` 에 `.claude/` 박기. 사후 정정: `git rm --cached` + `git commit --amend` (push 전).
 
 ### AWS / 운영 인프라
 - [T-006](#t-006) EC2 stop/start 시 퍼블릭 IP가 매번 바뀜 → GitHub Secret 갱신 지옥
@@ -308,6 +309,17 @@ CORS 운영 검증 (PR #38) 직후 컨테이너 restart loop → 표면은 "CORS
 | **해결** | **`-F file` 패턴 — 메시지를 파일로 만들어 git 에 경로로 넘긴다**:<br>&nbsp;&nbsp;```powershell<br>&nbsp;&nbsp;# 1) UTF-8 (BOM 없이) 인코딩으로 임시 파일 생성<br>&nbsp;&nbsp;@'<br>&nbsp;&nbsp;docs: ... 한글 + 특수문자<br>&nbsp;&nbsp;<br>&nbsp;&nbsp;본문 추가 단락 ...<br>&nbsp;&nbsp;'@ \| Out-File -Encoding utf8 -FilePath commit-msg.txt<br>&nbsp;&nbsp;<br>&nbsp;&nbsp;# 2) git 이 파일에서 읽음 — 인자 파싱 안 거침<br>&nbsp;&nbsp;git commit -F commit-msg.txt<br>&nbsp;&nbsp;<br>&nbsp;&nbsp;# 3) 청소<br>&nbsp;&nbsp;Remove-Item commit-msg.txt<br>&nbsp;&nbsp;```<br>git-bash 환경에선 here-doc (`<<EOF`) 으로 직접 전달해도 안전 — PowerShell 5.1 한정 함정. |
 | **시점** | PR #57 작업의 worktree Agent commit 단계에서 만남 — 2026-05-27. |
 | **교훈** | **1. PowerShell 5.1 + 한글/특수문자 commit 메시지 = `-F file` 표준, `-m here-string` 금지**<br>영어/단순 본문에선 `-m here-string` 도 동작하지만 한글/대시/백틱 섞이면 깨진다. 다음 사람을 위해 무조건 `-F file` 패턴으로 통일.<br><br>**2. 임시 파일 인코딩은 `Out-File -Encoding utf8` (BOM 없음)**<br>기본 PowerShell 인코딩 (UTF-16 LE BOM) 이면 git 이 깨진 인코딩으로 읽고 commit 메시지가 한글이 ?? 로 표시. `-Encoding utf8` 명시 의무.<br><br>**3. 일반화 — native 도구에 한글/특수 토큰 본문을 인자로 직접 넘기는 게 의심스러우면 파일 경유**<br>git 뿐 아니라 docker.exe / aws.exe / curl 등도 동일. `-F`, `--file`, `<` redirection 등 파일에서 읽는 옵션이 있으면 그쪽이 안전. PowerShell 5.1 의 native arg parsing 은 모든 native 도구 호출에 작동.<br><br>**4. CLAUDE.md 의 PowerShell here-string 예시는 영어 한정**<br>현재 CLAUDE.md 의 PowerShell 가이드라인은 here-string 예시를 영어로 보여줌. 한글/특수문자 본문엔 `-F` 가 표준이라는 점이 명시되어 있지 않음 — 미래 Claude 가 그 예시를 보고 한글에도 그대로 적용하면 같은 trap. 이 항목이 grep 좌표 역할. |
+
+<a id="t-027"></a>
+### T-027 · `git add -A` 가 worktree 디렉토리를 main repo 에 submodule reference 로 commit
+
+| | |
+|---|---|
+| **증상** | PR #59 (PR 4-pre) 의 commit 단계에서 `git add -A && git commit -F /tmp/msg.txt` 실행 시 git 출력:<br>&nbsp;&nbsp;```<br>&nbsp;&nbsp;warning: adding embedded git repository: .claude/worktrees/agent-ad3c74a9f6fba8eae<br>&nbsp;&nbsp;hint: You've added another git repository inside your current repository.<br>&nbsp;&nbsp;...<br>&nbsp;&nbsp;[feat/pr4-pre-... 2bd15b2] feat: PR 4-pre ...<br>&nbsp;&nbsp; 20 files changed, 814 insertions(+), 37 deletions(-)<br>&nbsp;&nbsp; create mode 160000 .claude/worktrees/agent-ad3c74a9f6fba8eae  ← submodule reference (gitlink)<br>&nbsp;&nbsp;```<br>`create mode 160000` 이 결정적 단서 — 일반 파일 (100644) 도, 실행 파일 (100755) 도 아닌 **gitlink**. 의도하지 않은 submodule 이 main repo history 에 들어감. push 전이라 정정 가능. |
+| **원인** | Worktree Agent (`isolation: "worktree"`) 가 만든 worktree 디렉토리는 `.claude/worktrees/agent-<id>` 에 위치하고 **자기 `.git` 폴더를 가진 별도 git repo**. git 이 nested repo 를 발견하면 submodule 처리하는 게 표준 동작이라 `git add -A` 가 그걸 **gitlink (mode 160000)** 로 잡는다.<br><br>혼동 포인트:<br>① main repo 의 `.gitignore` 에 `.claude/` 가 미리 박혀 있지 않으면 worktree Agent 가 처음 만든 그 디렉토리가 untracked 로 잡힘 → `git add -A` 가 자연스럽게 포함.<br>② Agent 가 작업 끝난 후 자동 cleanup 되어도 git 이 그 시점의 gitlink 를 commit 에 박은 후라 main repo history 에 남음.<br>③ `git log -1 --stat` 또는 `git status` 가 `mode 160000` 을 표시하지만 처음 보는 사람은 이게 submodule 인 줄 모르고 넘어갈 수 있음. |
+| **해결** | **사전 방어 (의무)** — main repo 의 `.gitignore` 에 다음 줄 추가:<br>&nbsp;&nbsp;```<br>&nbsp;&nbsp;# Claude Code worktree directory — Agent isolation 이 만드는 sub-repo. 절대 commit 금지.<br>&nbsp;&nbsp;.claude/<br>&nbsp;&nbsp;```<br>이게 미리 있으면 `git add -A` 가 worktree 디렉토리를 무시 → 사고 자체가 발생 X.<br><br>**사후 정정 (push 전)** — commit 직후 `git log -1 --stat` 에 `mode 160000` 보이면:<br>&nbsp;&nbsp;```bash<br>&nbsp;&nbsp;git rm --cached .claude/worktrees/agent-<id><br>&nbsp;&nbsp;echo '.claude/' >> .gitignore<br>&nbsp;&nbsp;git add .gitignore<br>&nbsp;&nbsp;git commit --amend --no-edit<br>&nbsp;&nbsp;```<br>amend 로 history rewrite — push 전이면 다른 누구에게도 영향 X.<br><br>**push 후 발견** — 다른 협업자가 그 브랜치 안 받았으면 `git push --force-with-lease`. 받았으면 그 사람도 rewrite 동기화 필요. 어색하니 가능하면 push 전 정정. |
+| **시점** | PR #59 (PR 4-pre AI 응답 골격) 의 commit 단계 — 2026-05-27. T-025 의 사고 후 워크플로우에 worktree Agent 호출이 들어왔지만 `.gitignore` 박기를 빠뜨림. |
+| **교훈** | **1. Worktree Agent 환경에선 `.gitignore` 에 `.claude/` 미리 박기**<br>한 번 박아두면 다음 worktree Agent 호출 시 자동 무시. T-025 (절대경로 risk) 와 함께 worktree 환경의 두 사전 방어선.<br><br>**2. `git add -A` 는 untracked sub-repo 까지 잡으므로 worktree 환경에선 위험**<br>대안: `git add <specific-paths>` 로 명시 (예: `git add src/ claude-docs/ .gitignore`). 단 새 파일이 많을 때 누락 risk → `.gitignore` 박기가 더 확실.<br><br>**3. `mode 160000` 은 gitlink 의 시그니처 — 즉시 의심**<br>`git log -1 --stat` / `git commit` 출력의 `create mode 160000 <path>` 가 보이면 거의 100% 의도하지 않은 submodule reference. 즉시 amend 정정.<br><br>**4. 격리 메커니즘의 가장자리에서 새 함정이 계속 나타난다**<br>T-025 (절대경로) → T-026 (PowerShell here-string) → T-027 (gitlink). 모두 worktree Agent 호출의 가장자리에서 발견. **Agent isolation 의 모든 경로 (filesystem path / 인자 인코딩 / git index) 를 한 번씩 의식하라**. 한 군데 막으면 다른 군데가 드러난다 — incident retrospective 의 표준 패턴.<br><br>**5. push 전 검증 한 줄: `git ls-tree -r HEAD \| grep ^160000`**<br>worktree Agent 호출 후 첫 commit 직후 이 한 줄 실행. 출력 있으면 gitlink, 없으면 OK. push 직전 routine 으로.<br>(이 항목 작성 중 실수로 `git log -1 --stat \| grep "mode 160000"` 을 권장했었다 — 그 명령은 **commit 메시지 본문에 "mode 160000" 토큰이 있으면 false positive**. `ls-tree -r HEAD` 는 현재 tree 의 entry mode 만 보므로 메시지와 무관. self-aware trap.) |
 
 ---
 
