@@ -2,6 +2,7 @@ package hoseo.moodiary.config;
 
 import hoseo.moodiary.controller.PostController;
 import hoseo.moodiary.security.JwtTokenProvider;
+import hoseo.moodiary.service.AiResponseService;
 import hoseo.moodiary.service.PostService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -41,6 +42,9 @@ class CorsConfigTest {
 
     @MockitoBean
     private PostService postService;
+
+    @MockitoBean
+    private AiResponseService aiResponseService;
 
     @MockitoBean
     private JwtTokenProvider jwtTokenProvider;

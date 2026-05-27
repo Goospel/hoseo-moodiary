@@ -94,11 +94,22 @@
 
 ## 🔄 진행 중
 
+> **PR 4-pre — 비동기 AI 응답 골격 + Stub 어댑터** (PR 생성 대기 중)
+> - `AiResponse` 1:1 단방향 엔티티 + `AiResponseStatus` enum + `@Table(uniqueConstraints)` (ddl-auto: update 가 unique 보장 X)
+> - `AiResponseClient` Stub 클래스 (interface 추출은 PR 4-final 의 Real 추가 시) — 고정 응답 `emoji: "😊"`, 즉시 DONE 전이
+> - `AsyncConfig` `@EnableAsync` 만 (executor 외부화는 실측 후 결정)
+> - `AiResponseService.triggerAsync` (`@Async`) + `getByPostId` (소유권 검증 + 폴링)
+> - `PostService.create()` 가 같은 트랜잭션에 PENDING row 도 저장 → 정합성 보장
+> - `PostService.delete()` 가 AiResponse cascade 삭제 (FK NOT NULL — 자식 먼저)
+> - `PostController` 가 commit 후 `triggerAsync` 호출 + `GET /post/{id}/ai-response` 신설
+> - 테스트 13+ 추가 (AiResponseServiceTest 7 + PostController AI 응답 nested 5 + PostServiceTest PENDING/cascade 검증 + CorsConfigTest T-012 재현 차단)
+> - `MoodiaryApplicationTests.contextLoads()` 통과 — Async + 새 Service 빈 그래프 부팅 검증
+
 > **PR 5 — Calendar API** (AI 합의 대기 중 우회 작업)
 > - `GET /calendar?year=YYYY&month=MM` 엔드포인트 신설
 > - QueryDSL 첫 도입 — `CalendarRepository` 가 `JPAQueryFactory` 사용
 > - 그 달 전체 일수 배열 반환 (빈 날 포함), KST 기준 일자 그룹핑, 하루 다중 글이면 마지막 글
-> - **emoji 필드는 항상 null** — PR 4 머지 후 후속 PR 에서 AiResponse LEFT JOIN 추가
+> - **emoji 필드는 항상 null** — PR 4-final 머지 후 후속 PR 에서 AiResponse LEFT JOIN 추가
 > - `build.gradle` 의 querydsl-jpa 가 `compileOnly` → `implementation` 변경 (CLAUDE.md trap 갱신)
 > - `MissingServletRequestParameterException` 핸들러 추가 (필수 파라미터 누락 → 400)
 > - 테스트 13 추가 (CalendarServiceTest 9 + CalendarControllerTest 4)
@@ -132,26 +143,50 @@ PR 2 (인증 — 완료) ─► PR 10 Refresh Token ─┬─► PR 11 OAuth2 Re
 > - **인증 강화 라인 (PR 10/11/12)** 은 데모 핵심 경로 (PR 8/4) 안정화 후 착수. **PR 10 (Refresh Token)** 은 보안/UX trade-off 해소가 동기, **PR 12 (소셜 로그인)** 은 졸업 데모 가시성, **PR 11 (OAuth2 Resource Server)** 는 표준화/리팩토링 (선택).
 
 ### PR 4 — 비동기 AI 응답 모듈 (글 + 기분 이모지) 🤖 ⭐⭐⭐
-**Why**: 프로젝트 핵심 차별 기능. 일기 → AI가 **응답 텍스트 + 기분 이모지** 둘 다 생성. 이모지는 PR 5 캘린더에서 사용됨.
 
-**설계 방향**: 단순화된 비동기 (큐/메시지브로커 없이 `@Async` + DB 상태 관리)
+> **두 단계로 쪼갬** (AI 담당자 외부 합의 대기 차단 해소 + 운영 영향 분리):
+> - **PR 4-pre** — 골격 + Stub 어댑터. AI 합의 없이 단독 진행 가능. 운영에 새 테이블 + Async + 폴링 엔드포인트 안착.
+> - **PR 4-final** — 실제 HTTP 어댑터 + Retry + WireMock 통합 테스트. AI 담당자 합의 후 어댑터 한 클래스 교체.
 
-📋 **API 상세 명세** → [`api-contracts.md#ai-response-폴링-pr-4`](./api-contracts.md#ai-response-폴링-pr-4)
-🔌 **외부 AI 서버 계약** → [`api-contracts.md#ai-추론-서버-pr-4`](./api-contracts.md#ai-추론-서버-pr-4)
+**Why**: 프로젝트 핵심 차별 기능. 일기 → AI 가 **응답 텍스트 + 기분 이모지** 둘 다 생성. 이모지는 PR 5 캘린더에서 사용됨.
+
+**설계 방향**: 단순화된 비동기 (큐/메시지브로커 없이 `@Async` + DB 상태 관리). 어댑터는 단일 클래스 (interface 추출은 PR 4-final 에서 Real 구현 추가될 때).
+
+📋 **API 상세 명세** → [`api-contracts.md#ai-response--stub--pr-4-pre`](./api-contracts.md#ai-response--stub--pr-4-pre)
+🔌 **외부 AI 서버 계약** → [`api-contracts.md#ai-추론-서버-pr-4-final`](./api-contracts.md#ai-추론-서버-pr-4-final)
+
+#### PR 4-pre — 골격 + Stub (🔄 PR 머지 대기 중)
 
 **구현 체크리스트**:
-- [ ] `AiResponse` 엔티티: `id`, `post_id`, `status (PENDING/DONE/FAILED)`, `content`, `emoji` (VARCHAR(8)), `error_message`, `BaseEntity`
-- [ ] `AiResponseRepository`
-- [ ] `@EnableAsync` + `@Async` 메서드 (전용 스레드풀)
-- [ ] AI 서버 호출: `RestClient` (Spring 6 새 동기 클라이언트)
-- [ ] `POST /post` 흐름 변경: 일기 저장 → `AiResponse(PENDING)` 생성 → `@Async`로 호출 트리거 → 즉시 201 반환
-- [ ] `GET /post/{id}/ai-response` 폴링 엔드포인트
-- [ ] 재시도/타임아웃 정책 (Spring Retry)
-- [ ] DB 컬럼은 **`utf8mb4`** 사용 (이모지 필수)
-- [ ] 테스트: AI 서버 mock (WireMock 또는 `@MockitoBean` RestClient)
-- [ ] **선행 합의 필요** — AI 담당자와의 계약 체크리스트는 [api-contracts.md의 합의 항목](./api-contracts.md#합의-항목-체크리스트) 참조
+- [x] `AiResponse` 엔티티 (1:1 단방향 → Post) + `AiResponseStatus` enum + `@Table(uniqueConstraints)` 로 post_id unique 명시
+- [x] `AiResponseJpaRepository` (`findByPost_Id`, `deleteByPost_Id`)
+- [x] `AiResponseClient` (Stub 클래스 — 고정 응답 `emoji: "😊"`)
+- [x] `AsyncConfig` (`@EnableAsync` 만 — executor 외부화는 PR 4-final 후 실측 보고 결정)
+- [x] `AiResponseService` (`triggerAsync` `@Async`, `getByPostId` 소유권 검증 + 폴링)
+- [x] `PostService.create()` 가 같은 트랜잭션에 PENDING row 도 저장 (정합성 보장)
+- [x] `PostService.delete()` 가 AiResponse cascade 삭제 (FK NOT NULL — 자식 먼저, 부모 나중)
+- [x] `PostController` 가 commit 후 `triggerAsync` 호출 + `GET /post/{id}/ai-response` 신설
+- [x] `GlobalExceptionHandler` 에 `AiResponseNotFoundException` 404 매핑
+- [x] 테스트: `AiResponseServiceTest` (7 케이스), `PostControllerTest` AI 응답 nested (5 케이스), `PostServiceTest` PENDING/cascade 검증, `CorsConfigTest` `@MockitoBean AiResponseService` 추가 (T-012 재현 차단)
+- [x] `MoodiaryApplicationTests.contextLoads()` 통과 — 새 빈 그래프 부팅 검증 (T-019 안전망)
 
-**예상 소요**: 1-2주 | **의존**: 없음 (PR 3 인증/소유권 이미 운영 반영) | **위험**: AI 서버 다운 시 일기 작성 자체는 안 막히게 fail-safe 설계 필수, 이모지 인코딩(utf8mb4)
+**운영 영향**: 새 테이블 `ai_response` 자동 생성, `post_id` unique 인덱스 수동 확인 권장, RDS `character_set_database` = utf8mb4 확인.
+
+**예상 소요**: 3-5일 | **의존**: 없음 (PR 3 인증/소유권 이미 운영 반영) | **위험**: utf8mb4 누락 시 이모지 INSERT 폭발, 4-pre stub 이 4-final 머지 후에도 활성화되면 "AI 응답 항상 같음" 운영 사고 → 4-final PR 의 환경변수 체크리스트 의무
+
+#### PR 4-final — 실제 HTTP 어댑터 + Retry (AI 합의 후)
+
+**선행 합의 필요** — AI 담당자와의 계약 체크리스트는 [api-contracts.md 의 합의 항목](./api-contracts.md#합의-항목-체크리스트) 참조.
+
+**구현 체크리스트**:
+- [ ] `AiResponseClient` 를 interface 로 추출, `StubAiResponseClient` + `HttpAiResponseClient` 두 구현
+- [ ] `HttpAiResponseClient` — `RestClient` (Spring 6 동기 클라이언트) 로 외부 호출
+- [ ] 재시도/타임아웃 정책 (Spring Retry — 4xx 재시도 X, 5xx N회 재시도 후 FAILED)
+- [ ] WireMock 통합 테스트 — 성공 / 타임아웃 / 5xx / 4xx / 파싱 실패 시나리오
+- [ ] `@ConditionalOnProperty(name="ai.client.mode")` 또는 다른 방식으로 stub/real 토글
+- [ ] EC2 `.env` 에 `AI_CLIENT_MODE=real` + `AI_SERVER_URL` + `AI_API_KEY` 추가 (운영 머지 전 필수)
+
+**예상 소요**: 1주 | **의존**: PR 4-pre 머지 + AI 담당자 합의 완료 | **위험**: 합의된 응답 포맷 변경 시 어댑터 재작성
 
 ---
 
@@ -512,4 +547,5 @@ MYSQL_PWD="$RDS_PASSWORD" mysql -h "$RDS_ENDPOINT" -u "$RDS_USERNAME" moodiary -
 | 2026-05-26 | **Workflow 규칙 일반화** ([T-020](./troubleshooting.md#t-020)) — 머지된 PR 본문을 사후 수정한 사고. CLAUDE.md 의 트리거를 "PR 생성 / 추가 push 전" 만이 아니라 "`gh pr` 으로 시작하는 거의 모든 명령 전" 으로 일반화. T-015 → T-018 → T-020 세 번째 재발. |
 | 2026-05-26 | **GitHub Pages 인프라 신설** — landing page (`site/index.html`) + Marp 슬라이드 자동 배포 (`/slides/`). `main` push 시 GitHub Actions 가 자동 build & deploy. 졸업 심사 / 교수 공유용 단일 URL 확보. 백로그 PR 9 (MkDocs Material 풀 문서 사이트) 신설 — 같은 인프라 위에 `claude-docs/*` 통합 예정. |
 | 2026-05-26 | **인증 강화 백로그 추가** (PR 10 Refresh Token, PR 11 OAuth2 Resource Server, PR 12 소셜 로그인). 현재 access-only 24h JWT 의 보안/UX trade-off 해소 (PR 10), 표준 Resource Server 로 리팩토링 (PR 11, 선택), 졸업 데모 가시성용 Google/Kakao 로그인 (PR 12). 의존성 라인: PR 2 (완료) → PR 10 → {PR 11 (선택), PR 12}. API 상세는 각 PR 시작 시 `api-contracts.md` 에 작성 — 이번 PR 은 plan.md 만 갱신. |
+| 2026-05-27 | **PR 4 를 PR 4-pre / PR 4-final 두 단계로 쪼갬**. AI 담당자 외부 합의 대기로 PR 4 가 막혀 있던 차단 해소 — PR 4-pre 는 골격 + Stub 어댑터 (단독 진행), PR 4-final 은 합의 후 어댑터만 교체. 단순화 결정 (todotv Simplicity First 적용): interface 제거 (Stub 클래스 단일), 이벤트 패턴 제거 (Controller 가 commit 후 직접 호출), `@ConditionalOnProperty` 제거, ThreadPoolTaskExecutor 외부화 제거. PR 4-pre 의 모든 체크리스트 [x] (10 새 파일 + 3 수정 + 13+ 테스트 + contextLoads 통과). |
 
