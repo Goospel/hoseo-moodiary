@@ -3,10 +3,12 @@ package hoseo.moodiary.service;
 import hoseo.moodiary.dto.request.LoginRequestDto;
 import hoseo.moodiary.dto.request.UserSignupRequestDto;
 import hoseo.moodiary.dto.response.LoginResponseDto;
+import hoseo.moodiary.dto.response.TokenRefreshResponseDto;
 import hoseo.moodiary.entitiy.User;
 import hoseo.moodiary.exception.DuplicateEmailException;
 import hoseo.moodiary.exception.DuplicateNicknameException;
 import hoseo.moodiary.exception.InvalidCredentialsException;
+import hoseo.moodiary.exception.InvalidRefreshTokenException;
 import hoseo.moodiary.repository.UserJpaRepository;
 import hoseo.moodiary.security.JwtTokenProvider;
 import org.junit.jupiter.api.DisplayName;
@@ -27,11 +29,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
- * UserService 단위 테스트 — 회원가입 분기, 비밀번호 해싱 위임, 로그인 분기 + JWT 발급 위임.
+ * UserService 단위 테스트 — 회원가입 분기, 비밀번호 해싱 위임, 로그인 + refresh + logout 흐름.
  */
 @ExtendWith(MockitoExtension.class)
 class UserServiceTest {
@@ -44,6 +47,9 @@ class UserServiceTest {
 
     @Mock
     private JwtTokenProvider jwtTokenProvider;
+
+    @Mock
+    private RefreshTokenService refreshTokenService;
 
     @InjectMocks
     private UserService userService;
@@ -87,7 +93,6 @@ class UserServiceTest {
             User saved = captor.getValue();
             assertThat(saved.getEmail()).isEqualTo("a@b.com");
             assertThat(saved.getNickname()).isEqualTo("nick");
-            // 평문이 그대로 저장되지 않는다 — 인코더가 반환한 값이 저장됨
             assertThat(saved.getPassword()).isEqualTo("HASHED");
             assertThat(saved.getPassword()).isNotEqualTo("password123");
         }
@@ -127,23 +132,25 @@ class UserServiceTest {
     class Login {
 
         @Test
-        @DisplayName("이메일/비밀번호 정상이면 JWT access token + userId 를 반환한다")
+        @DisplayName("이메일/비밀번호 정상이면 access + refresh + userId 셋 다 반환한다")
         void success() {
             UUID userId = UUID.randomUUID();
             User stored = userWithId(userId, "a@b.com", "HASHED", "nick");
             given(repository.findByEmail("a@b.com")).willReturn(Optional.of(stored));
             given(passwordEncoder.matches("password123", "HASHED")).willReturn(true);
             given(jwtTokenProvider.createAccessToken(userId)).willReturn("issued.jwt.token");
+            given(refreshTokenService.issue(userId)).willReturn("issued-refresh-token");
 
             LoginResponseDto result = userService.login(LoginRequestDto.builder()
                     .email("a@b.com").password("password123").build());
 
             assertThat(result.getAccessToken()).isEqualTo("issued.jwt.token");
+            assertThat(result.getRefreshToken()).isEqualTo("issued-refresh-token");
             assertThat(result.getUserId()).isEqualTo(userId);
         }
 
         @Test
-        @DisplayName("이메일이 존재하지 않으면 InvalidCredentialsException (열거 공격 방지 — 메시지 동일)")
+        @DisplayName("이메일이 존재하지 않으면 InvalidCredentialsException (열거 공격 방지) + 토큰 발급 안 함")
         void emailNotFound() {
             given(repository.findByEmail("a@b.com")).willReturn(Optional.empty());
 
@@ -154,10 +161,11 @@ class UserServiceTest {
 
             verify(passwordEncoder, never()).matches(any(), any());
             verify(jwtTokenProvider, never()).createAccessToken(any());
+            verify(refreshTokenService, never()).issue(any());
         }
 
         @Test
-        @DisplayName("비밀번호가 불일치하면 InvalidCredentialsException 을 던지고 토큰을 발급하지 않는다")
+        @DisplayName("비밀번호가 불일치하면 InvalidCredentialsException + 토큰 발급 안 함")
         void passwordMismatch() {
             User stored = userWithId(UUID.randomUUID(), "a@b.com", "HASHED", "nick");
             given(repository.findByEmail("a@b.com")).willReturn(Optional.of(stored));
@@ -169,6 +177,51 @@ class UserServiceTest {
                     .hasMessageContaining("이메일 또는 비밀번호가 올바르지 않습니다.");
 
             verify(jwtTokenProvider, never()).createAccessToken(any());
+            verify(refreshTokenService, never()).issue(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("refresh — 토큰 갱신")
+    class Refresh {
+
+        @Test
+        @DisplayName("유효한 refresh 면 rotate + 새 access 발급해 둘 다 반환한다")
+        void success() {
+            UUID userId = UUID.randomUUID();
+            given(refreshTokenService.rotate("old-refresh"))
+                    .willReturn(new RefreshTokenService.RotationResult(userId, "new-refresh"));
+            given(jwtTokenProvider.createAccessToken(userId)).willReturn("new.access.jwt");
+
+            TokenRefreshResponseDto result = userService.refresh("old-refresh");
+
+            assertThat(result.getAccessToken()).isEqualTo("new.access.jwt");
+            assertThat(result.getRefreshToken()).isEqualTo("new-refresh");
+        }
+
+        @Test
+        @DisplayName("rotate 가 InvalidRefreshTokenException 던지면 그대로 전파 (401 매핑은 GlobalExceptionHandler)")
+        void invalidToken() {
+            willThrow(new InvalidRefreshTokenException())
+                    .given(refreshTokenService).rotate("invalid");
+
+            assertThatThrownBy(() -> userService.refresh("invalid"))
+                    .isInstanceOf(InvalidRefreshTokenException.class);
+
+            verify(jwtTokenProvider, never()).createAccessToken(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("logout — 로그아웃")
+    class Logout {
+
+        @Test
+        @DisplayName("refresh token 무효화를 위임한다 (idempotent — 없는 토큰도 예외 X)")
+        void delegatesRevoke() {
+            userService.logout("some-refresh");
+
+            verify(refreshTokenService).revoke("some-refresh");
         }
     }
 }
