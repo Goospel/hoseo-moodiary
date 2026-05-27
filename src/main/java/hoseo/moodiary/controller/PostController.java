@@ -1,7 +1,9 @@
 package hoseo.moodiary.controller;
 
 import hoseo.moodiary.dto.request.PostRequestDto;
+import hoseo.moodiary.dto.response.AiResponseDto;
 import hoseo.moodiary.dto.response.PostResponseDto;
+import hoseo.moodiary.service.AiResponseService;
 import hoseo.moodiary.service.PostService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -36,14 +38,20 @@ import java.util.UUID;
 public class PostController {
 
     private final PostService service;
+    private final AiResponseService aiResponseService;
 
-    @Operation(summary = "게시글 생성", description = "새 일기를 작성한다. 작성자는 현재 인증된 사용자로 자동 설정.")
+    @Operation(summary = "게시글 생성",
+            description = "새 일기를 작성한다. 작성자는 현재 인증된 사용자로 자동 설정. "
+                    + "AI 응답은 비동기로 트리거되어 PENDING 상태로 즉시 반환 — 결과는 GET /post/{id}/ai-response 폴링.")
     @ApiResponse(responseCode = "201", description = "생성 성공 — 새 게시글 UUID 반환")
     @ApiResponse(responseCode = "401", description = "미인증")
     @PostMapping("/post")
     public ResponseEntity<UUID> post(@AuthenticationPrincipal UUID userId,
                                      @Valid @RequestBody PostRequestDto requestDto) {
         UUID postId = service.create(userId, requestDto);
+        // create() 의 @Transactional 가 메서드 return 시점에 commit. 이 줄에서 호출하면 새 Async
+        // 트랜잭션이 PENDING row 를 안전하게 select 가능 (race 없음).
+        aiResponseService.triggerAsync(postId);
         return ResponseEntity.status(HttpStatus.CREATED).body(postId);
     }
 
@@ -78,7 +86,7 @@ public class PostController {
         return ResponseEntity.ok(service.update(userId, id, requestDto));
     }
 
-    @Operation(summary = "게시글 삭제", description = "본인 글만 삭제 가능.")
+    @Operation(summary = "게시글 삭제", description = "본인 글만 삭제 가능. 연결된 AI 응답도 함께 제거.")
     @ApiResponse(responseCode = "204", description = "삭제 성공")
     @ApiResponse(responseCode = "401", description = "미인증")
     @ApiResponse(responseCode = "403", description = "본인 글이 아님")
@@ -88,5 +96,18 @@ public class PostController {
                                        @PathVariable UUID id) {
         service.delete(userId, id);
         return ResponseEntity.noContent().build();
+    }
+
+    @Operation(summary = "AI 응답 폴링",
+            description = "비동기 AI 추론의 현재 상태/결과를 조회. 본인 글만 가능. "
+                    + "현재 PR 4-pre 는 Stub 어댑터 — 호출 직후 거의 즉시 DONE 으로 전이.")
+    @ApiResponse(responseCode = "200", description = "조회 성공 — status 가 PENDING / DONE / FAILED")
+    @ApiResponse(responseCode = "401", description = "미인증")
+    @ApiResponse(responseCode = "403", description = "본인 글이 아님")
+    @ApiResponse(responseCode = "404", description = "존재하지 않는 게시글 또는 AI 응답")
+    @GetMapping("/post/{id}/ai-response")
+    public ResponseEntity<AiResponseDto> getAiResponse(@AuthenticationPrincipal UUID userId,
+                                                       @PathVariable UUID id) {
+        return ResponseEntity.ok(aiResponseService.getByPostId(userId, id));
     }
 }

@@ -37,6 +37,12 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponseDto.builder().message(e.getMessage()).build());
     }
 
+    @ExceptionHandler(AiResponseNotFoundException.class)
+    public ResponseEntity<ErrorResponseDto> handleAiResponseNotFound(AiResponseNotFoundException e) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponseDto.builder().message(e.getMessage()).build());
+    }
+
     @ExceptionHandler(CalendarInvalidRangeException.class)
     public ResponseEntity<ErrorResponseDto> handleCalendarInvalidRange(CalendarInvalidRangeException e) {
         return ResponseEntity.badRequest()
