@@ -46,3 +46,5 @@ out/
 
 ### Secrets — compose 가 자동 로드. EC2 의 ~/.env 와 동일 구조. .env.example 참고 ###
 .env
+# Claude Code worktree directory — Agent isolation 이 만드는 sub-repo. 절대 commit 금지.
+.claude/

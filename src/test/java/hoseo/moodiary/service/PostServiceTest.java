@@ -2,10 +2,12 @@ package hoseo.moodiary.service;
 
 import hoseo.moodiary.dto.request.PostRequestDto;
 import hoseo.moodiary.dto.response.PostResponseDto;
+import hoseo.moodiary.entitiy.AiResponse;
 import hoseo.moodiary.entitiy.Post;
 import hoseo.moodiary.entitiy.User;
 import hoseo.moodiary.exception.PostAccessDeniedException;
 import hoseo.moodiary.exception.PostNotFoundException;
+import hoseo.moodiary.repository.AiResponseJpaRepository;
 import hoseo.moodiary.repository.PostJpaRepository;
 import hoseo.moodiary.repository.UserJpaRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -41,6 +43,9 @@ class PostServiceTest {
 
     @Mock
     private UserJpaRepository userRepository;
+
+    @Mock
+    private AiResponseJpaRepository aiResponseRepository;
 
     @InjectMocks
     private PostService postService;
@@ -87,6 +92,20 @@ class PostServiceTest {
 
             assertThat(result).isEqualTo(newPostId);
             verify(postRepository).save(any(Post.class));
+        }
+
+        @Test
+        @DisplayName("같은 트랜잭션에 AiResponse(PENDING) row 도 저장한다 — 일기와 PENDING 의 정합성 보장")
+        void alsoCreatesPendingAiResponse() {
+            UUID newPostId = UUID.randomUUID();
+            given(userRepository.getReferenceById(OWNER_ID)).willReturn(userWithId(OWNER_ID));
+            given(postRepository.save(any(Post.class)))
+                    .willReturn(postWithId(newPostId, OWNER_ID, "t", "c"));
+
+            postService.create(OWNER_ID,
+                    PostRequestDto.builder().title("t").content("c").build());
+
+            verify(aiResponseRepository).save(any(AiResponse.class));
         }
     }
 
@@ -209,7 +228,7 @@ class PostServiceTest {
     class Delete {
 
         @Test
-        @DisplayName("본인 글이면 delete 를 호출한다")
+        @DisplayName("본인 글이면 AiResponse cascade 삭제 후 Post 삭제")
         void ownedSuccess() {
             UUID postId = UUID.randomUUID();
             Post existing = postWithId(postId, OWNER_ID, "t", "c");
@@ -217,6 +236,8 @@ class PostServiceTest {
 
             postService.delete(OWNER_ID, postId);
 
+            // 자식 (AiResponse) 먼저, 부모 (Post) 나중 — FK NOT NULL 정합성.
+            verify(aiResponseRepository).deleteByPost_Id(postId);
             verify(postRepository).delete(existing);
         }
 

@@ -3,10 +3,14 @@ package hoseo.moodiary.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import hoseo.moodiary.config.SecurityConfig;
 import hoseo.moodiary.dto.request.PostRequestDto;
+import hoseo.moodiary.dto.response.AiResponseDto;
 import hoseo.moodiary.dto.response.PostResponseDto;
+import hoseo.moodiary.entitiy.AiResponseStatus;
+import hoseo.moodiary.exception.AiResponseNotFoundException;
 import hoseo.moodiary.exception.PostAccessDeniedException;
 import hoseo.moodiary.exception.PostNotFoundException;
 import hoseo.moodiary.security.JwtTokenProvider;
+import hoseo.moodiary.service.AiResponseService;
 import hoseo.moodiary.service.PostService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -24,6 +28,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import java.util.List;
 import java.util.UUID;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -59,6 +64,9 @@ class PostControllerTest {
     private PostService postService;
 
     @MockitoBean
+    private AiResponseService aiResponseService;
+
+    @MockitoBean
     private JwtTokenProvider jwtTokenProvider;
 
     private static final UUID USER_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
@@ -74,7 +82,7 @@ class PostControllerTest {
     class Create {
 
         @Test
-        @DisplayName("정상 입력이면 201과 새 게시글 UUID 를 반환한다")
+        @DisplayName("정상 입력이면 201과 새 게시글 UUID 반환 + AI 추론을 비동기로 트리거")
         void create_success() throws Exception {
             UUID newId = UUID.randomUUID();
             given(postService.create(eq(USER_ID), any(PostRequestDto.class))).willReturn(newId);
@@ -87,6 +95,9 @@ class PostControllerTest {
                             .content(body))
                     .andExpect(status().isCreated())
                     .andExpect(content().string("\"" + newId + "\""));
+
+            // commit 후 비동기 트리거 검증 — 골격 PR 의 핵심 흐름.
+            verify(aiResponseService).triggerAsync(newId);
         }
 
         @Test
@@ -309,6 +320,92 @@ class PostControllerTest {
         }
     }
 
+    @Nested
+    @DisplayName("GET /post/{id}/ai-response — AI 응답 폴링")
+    class AiResponsePolling {
+
+        @Test
+        @DisplayName("PENDING 이면 200 + content/emoji 가 JSON 에서 null. errorMessage 키는 응답에서 생략")
+        void pending() throws Exception {
+            UUID id = UUID.randomUUID();
+            given(aiResponseService.getByPostId(USER_ID, id)).willReturn(
+                    AiResponseDto.builder()
+                            .postId(id)
+                            .status(AiResponseStatus.PENDING)
+                            .build());
+
+            mockMvc.perform(get("/post/{id}/ai-response", id).with(asUser(USER_ID)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("PENDING"))
+                    .andExpect(jsonPath("$.content").value(nullValue()))
+                    .andExpect(jsonPath("$.emoji").value(nullValue()))
+                    .andExpect(jsonPath("$.errorMessage").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("DONE 이면 200 + content/emoji 채워져 있음. errorMessage 키는 응답에서 생략")
+        void done() throws Exception {
+            UUID id = UUID.randomUUID();
+            given(aiResponseService.getByPostId(USER_ID, id)).willReturn(
+                    AiResponseDto.builder()
+                            .postId(id)
+                            .status(AiResponseStatus.DONE)
+                            .content("AI 본문")
+                            .emoji("😊")
+                            .build());
+
+            mockMvc.perform(get("/post/{id}/ai-response", id).with(asUser(USER_ID)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("DONE"))
+                    .andExpect(jsonPath("$.content").value("AI 본문"))
+                    .andExpect(jsonPath("$.emoji").value("😊"))
+                    .andExpect(jsonPath("$.errorMessage").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("FAILED 면 200 + errorMessage 가 응답에 포함, content/emoji 는 null")
+        void failed() throws Exception {
+            UUID id = UUID.randomUUID();
+            given(aiResponseService.getByPostId(USER_ID, id)).willReturn(
+                    AiResponseDto.builder()
+                            .postId(id)
+                            .status(AiResponseStatus.FAILED)
+                            .errorMessage("AI 서버 응답 시간 초과")
+                            .build());
+
+            mockMvc.perform(get("/post/{id}/ai-response", id).with(asUser(USER_ID)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("FAILED"))
+                    .andExpect(jsonPath("$.content").value(nullValue()))
+                    .andExpect(jsonPath("$.emoji").value(nullValue()))
+                    .andExpect(jsonPath("$.errorMessage").value("AI 서버 응답 시간 초과"));
+        }
+
+        @Test
+        @DisplayName("타인 글이면 403")
+        void notOwned() throws Exception {
+            UUID id = UUID.randomUUID();
+            given(aiResponseService.getByPostId(USER_ID, id))
+                    .willThrow(new PostAccessDeniedException(id));
+
+            mockMvc.perform(get("/post/{id}/ai-response", id).with(asUser(USER_ID)))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("존재하지 않는 postId 또는 AI 응답이면 404")
+        void notFound() throws Exception {
+            UUID id = UUID.randomUUID();
+            given(aiResponseService.getByPostId(USER_ID, id))
+                    .willThrow(new AiResponseNotFoundException(id));
+
+            mockMvc.perform(get("/post/{id}/ai-response", id).with(asUser(USER_ID)))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.message")
+                            .value("AI 응답을 찾을 수 없습니다. postId=" + id));
+        }
+    }
+
     /** 미인증 — SecurityFilterChain 잠금이 의도대로 동작하는지 검증. */
     @Nested
     @DisplayName("미인증 접근 — 401")
@@ -347,6 +444,17 @@ class PostControllerTest {
                     .andExpect(status().isUnauthorized());
 
             verify(postService, never()).delete(any(), any());
+        }
+
+        @Test
+        @DisplayName("GET /post/{id}/ai-response 인증 없으면 401")
+        void aiResponse_unauthorized() throws Exception {
+            UUID id = UUID.randomUUID();
+
+            mockMvc.perform(get("/post/{id}/ai-response", id))
+                    .andExpect(status().isUnauthorized());
+
+            verify(aiResponseService, never()).getByPostId(any(), any());
         }
     }
 }

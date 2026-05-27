@@ -2,10 +2,12 @@ package hoseo.moodiary.service;
 
 import hoseo.moodiary.dto.request.PostRequestDto;
 import hoseo.moodiary.dto.response.PostResponseDto;
+import hoseo.moodiary.entitiy.AiResponse;
 import hoseo.moodiary.entitiy.Post;
 import hoseo.moodiary.entitiy.User;
 import hoseo.moodiary.exception.PostAccessDeniedException;
 import hoseo.moodiary.exception.PostNotFoundException;
+import hoseo.moodiary.repository.AiResponseJpaRepository;
 import hoseo.moodiary.repository.PostJpaRepository;
 import hoseo.moodiary.repository.UserJpaRepository;
 import lombok.RequiredArgsConstructor;
@@ -36,11 +38,20 @@ public class PostService {
 
     private final PostJpaRepository postRepository;
     private final UserJpaRepository userRepository;
+    private final AiResponseJpaRepository aiResponseRepository;
 
+    /**
+     * 일기 + AI 응답 PENDING row 를 같은 트랜잭션에 저장. 이 메서드 return 후 컨트롤러가
+     * {@code AiResponseService.triggerAsync(postId)} 를 호출해 비동기 추론을 트리거한다.
+     *
+     * <p>같은 트랜잭션 정책의 이유: 일기는 저장됐는데 PENDING row 가 없는 상태 (= 폴링 시 404) 를
+     * 방지. 두 row 의 invariant 를 트랜잭션 경계로 보장.
+     */
     public UUID create(UUID currentUserId, PostRequestDto requestDto) {
         // getReferenceById: 프록시 반환 — User 테이블 SELECT 발생하지 않음. FK 채우기에 충분.
         User userRef = userRepository.getReferenceById(currentUserId);
         Post saved = postRepository.save(requestDto.toEntity(userRef));
+        aiResponseRepository.save(AiResponse.builder().post(saved).build());
         return saved.getId();
     }
 
@@ -64,6 +75,8 @@ public class PostService {
 
     public void delete(UUID currentUserId, UUID postId) {
         Post post = loadOwned(currentUserId, postId);
+        // 1:1 AiResponse 도 함께 제거 — Post FK 가 NOT NULL 이라 순서 중요 (자식 먼저, 부모 나중).
+        aiResponseRepository.deleteByPost_Id(postId);
         postRepository.delete(post);
     }
 

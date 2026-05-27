@@ -34,10 +34,10 @@
     - [DELETE /post/{id}](#delete-postid)
   - [Calendar](#calendar)
     - [GET /calendar](#get-calendar)
-- [예정 API](#예정-api)
-  - [AI Response 폴링 (PR 4)](#ai-response-폴링-pr-4)
+  - [AI Response (🚧 Stub — PR 4-pre)](#ai-response--stub--pr-4-pre)
+    - [GET /post/{id}/ai-response](#get-postidai-response)
 - [외부 시스템 계약](#외부-시스템-계약)
-  - [AI 추론 서버 (PR 4)](#ai-추론-서버-pr-4)
+  - [AI 추론 서버 (PR 4-final)](#ai-추론-서버-pr-4-final)
 
 ---
 
@@ -55,7 +55,7 @@
 | 게시글 수정 | `PUT` | `/post/{id}` | ✅ 필수 | ✅ JSON | `200` `PostResponseDto` |
 | 게시글 삭제 | `DELETE` | `/post/{id}` | ✅ 필수 | ❌ | `204` (바디 없음) |
 | 월별 캘린더 조회 | `GET` | `/calendar?year=YYYY&month=MM` | ✅ 필수 | ❌ | `200` `CalendarDayResponseDto[]` |
-| (예정) AI 응답 폴링 | `GET` | `/post/{id}/ai-response` | ✅ 필수 | ❌ | `200` 상태별 payload |
+| AI 응답 폴링 (🚧 Stub) | `GET` | `/post/{id}/ai-response` | ✅ 필수 | ❌ | `200` 상태별 payload |
 
 **화이트리스트 (인증 불필요)** — Spring Security `SecurityConfig.WHITELIST`:
 - `/auth/**` — 회원가입/로그인은 인증 자체가 불가능
@@ -411,14 +411,16 @@ GET /calendar?year=2026&month=5
 
 ---
 
-## 예정 API
+### AI Response (🚧 Stub — PR 4-pre)
 
-> 아직 구현 안 됨. 작업 들어가기 전 이 섹션에서 합의 → 구현 → Swagger 자동 생성으로 일치 검증.
-
-### AI Response 폴링 (PR 4)
+> 🚧 **현재 (PR 4-pre, Stub 모드)**: 실제 AI 서버 호출 없이 고정 응답 (`emoji: "😊"`) 을 즉시 반환. `POST /post` 직후 거의 즉시 `DONE` 으로 전이되어 폴링 한 번이면 결과 도달.
+>
+> **PR 4-final (예정)**: 실제 HTTP 어댑터 + Retry + 타임아웃. 외부 AI 서버 계약은 [아래 외부 시스템 계약 섹션](#ai-추론-서버-pr-4-final) 참조 — 합의 완료 후 어댑터만 교체.
 
 #### `GET /post/{id}/ai-response`
-사용자가 일기를 작성하면 즉시 `POST /post`가 201을 반환하고, **AI 응답은 비동기로 처리**됩니다. 프론트는 이 엔드포인트를 폴링해서 완료 여부를 확인.
+사용자가 일기를 작성하면 즉시 `POST /post` 가 201 을 반환하고, **AI 응답은 비동기로 처리**된다. 프론트는 이 엔드포인트를 폴링해서 완료 여부를 확인.
+
+흐름: `POST /post` (201, 일기 저장 + `AiResponse(PENDING)` 동시 저장 + 비동기 트리거) → FE 폴링 → `status: PENDING` 또는 `DONE` / `FAILED`.
 
 **Headers**
 ```
@@ -427,7 +429,7 @@ Authorization: Bearer <accessToken>
 
 **Response — 200 OK** (상태에 따라)
 
-`status: PENDING`
+`status: PENDING` — Async 워커가 아직 결과를 못 받은 상태. `errorMessage` 키는 응답에 없음 (`@JsonInclude(NON_NULL)`).
 ```json
 {
   "postId": "9c4d401e-...",
@@ -437,7 +439,7 @@ Authorization: Bearer <accessToken>
 }
 ```
 
-`status: DONE`
+`status: DONE` — 추론 성공. `errorMessage` 키는 응답에 없음.
 ```json
 {
   "postId": "9c4d401e-...",
@@ -447,7 +449,7 @@ Authorization: Bearer <accessToken>
 }
 ```
 
-`status: FAILED`
+`status: FAILED` — 추론 실패. `content / emoji` 는 null, `errorMessage` 에 사유.
 ```json
 {
   "postId": "9c4d401e-...",
@@ -458,12 +460,14 @@ Authorization: Bearer <accessToken>
 }
 ```
 
+**필드 명시 정책**: `errorMessage` 는 `FAILED` 일 때만 응답에 포함된다 (`@JsonInclude(NON_NULL)`). `PENDING / DONE` 응답에는 `errorMessage` 키 자체가 없다. `content / emoji` 는 비대칭 없이 모든 상태에서 키가 있고 null 일 수 있음.
+
 **에러**
 - `401` — 인증 누락/실패
-- `403` — 본인 글이 아님
-- `404` — postId가 존재하지 않음 또는 해당 post에 AI 응답이 트리거되지 않음
+- `403` — 본인 글이 아님 (Post 존재 노출 방지를 위해 404 보다 우선 검증)
+- `404` — `postId` 가 존재하지 않음. 메시지: `"AI 응답을 찾을 수 없습니다. postId=<uuid>"`
 
-> 📌 **FE 폴링 정책 합의 필요**: 1초 간격? 지수 백오프? → 합의 후 결정
+> 📌 **FE 폴링 정책 합의 필요**: 1초 간격? 지수 백오프? → 합의 후 결정. Stub 단계에선 거의 즉시 DONE 이라 폴링 1~2회로 충분.
 
 ---
 
@@ -471,7 +475,7 @@ Authorization: Bearer <accessToken>
 
 > 우리가 **호출하는** 서버의 API. Swagger에는 안 나옴. 여기서 합의 → 변경 시 양쪽 동기화.
 
-### AI 추론 서버 (PR 4)
+### AI 추론 서버 (PR 4-final)
 
 #### 우리가 보낼 요청
 > ⚠️ **AI 담당자와 합의 필요**. 아래는 우리 측 제안 초안.
@@ -529,3 +533,4 @@ Content-Type: application/json
 | 2026-05-24 | 신설. 공통 규약 / 구현된 Post CRUD 5개 / 예정 API (Auth, AI 응답 폴링, Calendar) / 외부 AI 서버 계약 명세 |
 | 2026-05-25 | PR 5 Calendar API 진행 중. `GET /calendar?year=YYYY&month=MM` 구현 — `emoji` 는 PR 4 머지 전까지 항상 null 임시 처리. 공통 규약에 `MissingServletRequestParameterException` 400 매핑 명시. |
 | 2026-05-26 | FE 공유용 정비. **엔드포인트 요약 표** 추가 (URL/Method/인증 헤더/Body/응답 한눈에). Auth (`/auth/signup`, `/auth/login`) 와 Calendar (`/calendar`) 를 "예정" → "구현된 API" 로 이동. Post CRUD 에 실제 구현된 인증 헤더 (`Authorization: Bearer`) + 소유권 401/403 매핑 반영. 회원가입 비밀번호 정책 (`^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$`) 명시. 로그인 응답에 `userId` 포함 명시. `409` (이메일/닉네임 중복) 에러 코드 추가. 공통 헤더 섹션 신설. |
+| 2026-05-27 | PR 4-pre 머지. `GET /post/{id}/ai-response` 를 "예정 API" → "구현된 API (🚧 Stub 모드)" 로 이동. Stub 박스 + errorMessage 분기 정책 (`@JsonInclude(NON_NULL)`, FAILED 만 포함) 명시. 엔드포인트 요약 표에 "🚧 Stub" 표시. 외부 시스템 계약 섹션 헤더 "PR 4" → "PR 4-final" 로 명확화. `POST /post` 가 일기 + `AiResponse(PENDING)` 같은 트랜잭션 저장 후 비동기 트리거하는 흐름 추가. |
