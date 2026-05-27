@@ -23,6 +23,7 @@
 | API 호출 규약 — 응답 포맷, 에러 매핑, 인증 헤더, CORS | [`claude-docs/api-contracts.md`](./claude-docs/api-contracts.md) |
 | 보안 한눈에 — JWT / Refresh Token / CORS / 인가 흐름 | [`claude-docs/security.md`](./claude-docs/security.md) |
 | **작업 중 막혔다** — 누가 같은 trap 을 먼저 만났을 수도 | [`claude-docs/troubleshooting.md`](./claude-docs/troubleshooting.md) |
+| **기술 개념 모르겠다** — 발표 / 면접 / Q&A 대비 | [`claude-docs/learning-notes.md`](./claude-docs/learning-notes.md) |
 | 코드 짜기 전 컨벤션 / PR 워크플로우 규칙 | [`CLAUDE.md`](./CLAUDE.md) |
 | 운영/배포 셋업 절차 (EC2 치트시트, FE S3 배포 가이드 등) | [`claude-docs/ops-runbooks/`](./claude-docs/ops-runbooks/) |
 
@@ -334,6 +335,7 @@ flowchart TB
 | [`claude-docs/api-contracts.md`](./claude-docs/api-contracts.md) | API 상세 명세 + 외부 AI 서버 계약 |
 | [`claude-docs/security.md`](./claude-docs/security.md) | JWT / Refresh / 비밀번호 / 시크릿 / 인가 / 약점 정리 |
 | [`claude-docs/troubleshooting.md`](./claude-docs/troubleshooting.md) | 누적 트러블슈팅 로그 (T-### 인덱스 grep) |
+| [`claude-docs/learning-notes.md`](./claude-docs/learning-notes.md) | 모르고 물어봐서 배운 기술 개념 정리 (발표 / Q&A 대비) |
 | [`claude-docs/ops-runbooks/`](./claude-docs/ops-runbooks/) | EC2 치트시트 / RDS 클린업 / FE S3 셋업 가이드 |
 
 ---
