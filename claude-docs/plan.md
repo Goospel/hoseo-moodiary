@@ -119,12 +119,17 @@ PR 6 Flyway                  (PR 4 의 AiResponse 스키마와 같이 도입 권
 PR 9 문서 사이트 (MkDocs)    (GitHub Pages 인프라 위에 풀 docs 통합, 미래)
 
 PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연스러움)
+
+# ── 인증 강화 라인 (PR 2 인증 완료 위에 쌓음) ──
+PR 2 (인증 — 완료) ─► PR 10 Refresh Token ─┬─► PR 11 OAuth2 Resource Server (선택, 먼 미래)
+                                           └─► PR 12 소셜 로그인 (Google + Kakao, 데모 가시성 ⭐⭐⭐)
 ```
 
 > **다음 핵심 경로**: **PR 8 → PR 4 → (PR 5 후속 emoji JOIN)**.
 > - **PR 8** 이 가시성 우선 — 졸업 발표에 "프론트가 떴고 백엔드와 통신" 까지 필수.
 > - **PR 4** 는 차별 기능 (AI 응답 + 이모지). AI 담당자 답변 대기 중이면 PR 8 부터 진행.
 > - **PR 6** 은 스키마 안정화 후 (PR 4 머지 시점) 같이.
+> - **인증 강화 라인 (PR 10/11/12)** 은 데모 핵심 경로 (PR 8/4) 안정화 후 착수. **PR 10 (Refresh Token)** 은 보안/UX trade-off 해소가 동기, **PR 12 (소셜 로그인)** 은 졸업 데모 가시성, **PR 11 (OAuth2 Resource Server)** 는 표준화/리팩토링 (선택).
 
 ### PR 4 — 비동기 AI 응답 모듈 (글 + 기분 이모지) 🤖 ⭐⭐⭐
 **Why**: 프로젝트 핵심 차별 기능. 일기 → AI가 **응답 텍스트 + 기분 이모지** 둘 다 생성. 이모지는 PR 5 캘린더에서 사용됨.
@@ -292,6 +297,70 @@ PR 7 ECS 이전                (먼 미래, HTTPS / 도메인 도입 시 자연�
 
 ---
 
+### PR 10 — Refresh Token 도입 🔐 ⭐⭐ (가까운 미래)
+**Why**: 현재 access token 만료 (`JwtProperties.expirationMs` — 운영 기본 24h) 가 보안/UX trade-off 의 가운데 어중간한 값. 보안 강화하려고 짧게 (15분) 잡으면 사용자가 자주 튕기고, UX 살리려고 길게 (30일) 잡으면 토큰 탈취 시 노출 창이 커진다. Refresh token 패턴으로 **access 짧게 (15분 등) + refresh 길게 (2주 등)** 로 분리해서 둘 다 만족.
+
+📋 **API 상세는 PR 10 시작 시 [`api-contracts.md`](./api-contracts.md) 에 작성** — 이번 PR 은 백로그 추가까지가 범위.
+
+**고려해야 할 분기점들** (PR 시작 전 합의 필수):
+- [ ] **저장 위치 결정** — DB (revoke 가능, 서버 부담 약간) vs httpOnly cookie (XSS 안전, CSRF 대비 필요) vs 둘 다. 현재 FE 가 localStorage 사용 중인 점 고려
+- [ ] **회전 (rotation) 적용 여부** — 적용 시 refresh 사용할 때마다 새 refresh 발급 + 기존 무효화. race condition (동시 요청) 주의
+- [ ] **새 엔드포인트 `POST /auth/refresh`** — `{refreshToken}` → `{accessToken, refreshToken?}` 응답. rotation 적용 시 새 refresh 같이 반환
+- [ ] **`LoginResponseDto` 변경** — `refreshToken` 필드 추가. FE 측 토큰 저장 패턴 변경 합의 필요 (cookie 채택 시 응답 body 에서는 빠짐)
+- [ ] **DB 스키마** — `refresh_token` 테이블 (userId, tokenHash, expiresAt, revokedAt, BaseEntity). DB 정책상 `ddl-auto: update` 가 인덱스 보장 X → `(user_id, token_hash)` UNIQUE 인덱스 수동 DDL 적용 필요
+- [ ] **로그아웃 엔드포인트 `POST /auth/logout`** — 의미가 refresh 무효화로 바뀜 (access 는 stateless 라 서버에서 막을 수 없음, 만료 대기). FE 와 합의 (logout 시 localStorage 클리어 + BE 호출)
+- [ ] **테스트** — refresh 정상 회전, expired refresh 거절, revoked refresh 거절, rotation race 시나리오
+
+**예상 소요**: 3-5일 | **의존**: 없음 (PR 2 인증 위에 쌓음) | **위험**: cookie 저장 채택 시 CORS `allowCredentials=true` + origin 화이트리스트 재검토 필요 (현재 PR 8 의 `CorsConfig` 갱신), rotation race condition (동시 refresh 요청 시 둘 다 새 토큰 받고 한 쪽이 즉시 무효화되어 사용자 튕김 — DB 트랜잭션 + 짧은 grace window 설계 필요)
+
+---
+
+### PR 11 — OAuth2 Resource Server 마이그레이션 🔐 ⭐ (선택, 먼 미래)
+**Why**: 현재 `JwtAuthenticationFilter` 가 수동 토큰 파싱 + `JwtTokenProvider` 가 직접 jjwt 호출. Spring Security 표준 `OAuth2 Resource Server` 로 교체하면 JWT 서명 검증/만료/클레임 추출이 표준 라이브러리로 흡수되고, JWK 도입 가능 (외부 IdP 연동 시 자연스러움), 코드량 감소, 보안 표준 준수.
+
+📋 **API 상세는 PR 11 시작 시 [`api-contracts.md`](./api-contracts.md) + [`security.md`](./security.md) 에 작성**.
+
+**고려 분기점**:
+- [ ] **자체 발급 JWT 그대로 Resource Server 로 검증** (`NimbusJwtDecoder.withSecretKey`) vs **외부 IdP 위임** (Auth0 / Keycloak / Cognito) — 졸업 데모 범위에서는 자체 발급 유지가 현실적
+- [ ] **마이그레이션 중 토큰 호환성** — 기존 발급된 access/refresh 가 그대로 검증되는지 (소프트 전환). 키/알고리즘 변경 없으면 호환됨
+- [ ] **`@AuthenticationPrincipal UUID userId` 추출 방식 변경** — 현재 `Authentication.getPrincipal()` 직접 캐스팅, Resource Server 채택 시 `Jwt` 객체에서 subject 클레임 매핑하는 `JwtAuthenticationConverter` 필요
+- [ ] **기존 `JwtAuthenticationFilter` / `JwtTokenProvider` 폐기 vs 발급 전용으로 축소** — 검증은 Resource Server, 발급은 여전히 우리 코드 (BCrypt 검증 후 토큰 발급)
+- [ ] **테스트 갱신** — `@WithMockUser` → `@WithJwt` 패턴 변경 또는 직접 `Jwt` 빌드
+
+**예상 소요**: 1주 | **의존**: PR 10 권장 (refresh 흐름 정착 후 큰 리팩토링이 안전) | **위험**: 운영 중 토큰 호환성 깨짐 위험 (마이그레이션 중 사용자 강제 재로그인 가능), FE 측 영향은 없으나 BE 컨트롤러 시그니처 영향 가능, 졸업프로젝트 범위 초과 가능 — **PR 7 (ECS) 같이 "시간 남으면" 카테고리**
+
+---
+
+### PR 12 — 소셜 로그인 (Google + Kakao) 🔐 ⭐⭐⭐ (졸업 데모 가시성)
+**Why**: 졸업 발표에 "구글로 로그인 한 줄" = 데모 임팩트 큼. 신규 가입 마찰 감소 (이메일/비번 입력 부담 X). 한국 사용자 기준 Kakao 도 자연스러움. 이미 인증 라인 (PR 2) + Refresh Token (PR 10) 위에 얹는 거라 구조 변경은 적음.
+
+📋 **API 상세는 PR 12 시작 시 [`api-contracts.md`](./api-contracts.md) 에 작성**.
+
+**고려 분기점**:
+- [ ] **인증 방식 선택** — Spring Security `oauth2Login` (서버 redirect 방식, 전통) vs **FE 가 provider access token 받아서 BE 로 넘기는 방식** (SPA/모바일 친화)
+  - **권장: 후자.** FE 는 Google/Kakao SDK 로 access token 받음 → `POST /auth/oauth2/{provider}` 로 BE 에 넘김 → BE 가 provider `userinfo` 엔드포인트로 검증 + 우리 JWT 발급. 모바일 확장 시 자유도 ↑
+- [ ] **새 엔드포인트** — `POST /auth/oauth2/google`, `POST /auth/oauth2/kakao` (request: `{providerAccessToken}`, response: 우리 JWT — PR 10 적용 시 access + refresh)
+- [ ] **`User` 엔티티 확장** — `provider` enum (LOCAL/GOOGLE/KAKOO), `providerId` 문자열, password nullable 화 (소셜 가입자는 비번 없음). 스키마 변경 → `ddl-auto: update` 로 컬럼 추가는 자동, 단 기존 row 의 `provider` 는 수동 backfill 필요 (`UPDATE users SET provider='LOCAL' WHERE provider IS NULL`)
+- [ ] **이메일 중복 정책 결정** — 같은 이메일이 LOCAL + GOOGLE 양쪽으로 가입 가능? 통합? 분리?
+  - 권장: 신규 소셜 가입 시 같은 이메일의 LOCAL 계정이 있으면 차단 + "이미 가입된 이메일입니다" 안내 (안전한 기본)
+- [ ] **Google** — OAuth client id/secret 발급 (Google Cloud Console). FE 가 토큰 받는 방식이면 BE 는 `https://oauth2.googleapis.com/tokeninfo?access_token=...` 호출로 검증만 (secret 불필요할 수도)
+- [ ] **Kakao** — REST API key 발급 (Kakao Developers). `https://kapi.kakao.com/v2/user/me` 로 userinfo 조회
+- [ ] **환경변수 / Secret 정책** — `GOOGLE_CLIENT_ID`, `KAKAO_REST_API_KEY` 등. tokeninfo 검증만 하면 secret 없이 client id 만 노출돼도 안전 → EC2 `.env` 만으로 충분. server-side OAuth flow 채택 시 secret 도 → GitHub Secrets + EC2 `.env` 양쪽 (compose.yaml 의 새 env 추가는 운영 머지 전 필수)
+- [ ] **테스트** — provider userinfo 응답 mock (WireMock), 신규 가입 시 User 생성, 기존 LOCAL 이메일 충돌 거절, JWT 발급 흐름
+
+**예상 소요**: 1-2주 | **의존**: PR 10 권장 (소셜 가입자도 토큰 만료 → refresh 가 자연스러움) | **위험**:
+- Google/Kakao Console 셋업 (1회성 IDE 외 작업, 권한 승인 등 외부 절차)
+- 이메일 중복 처리 정책이 사용자 경험에 직접 영향 → 결정 신중
+- FE 측 redirect 흐름 vs token-pass 방식 합의 (위 "권장: 후자" 채택 시 FE 가 provider SDK 직접 사용 필요 — FE 담당자와 사전 합의)
+- compose.yaml / EC2 `.env` / GitHub Secrets 3중 동기화 — **운영 머지 전 필수** 체크리스트 필요
+
+**운영 머지 전 필수**:
+- [ ] compose.yaml 에 `GOOGLE_CLIENT_ID`, `KAKAO_REST_API_KEY` env 주입 추가 (PR 8 `:-` default 패턴 따름)
+- [ ] EC2 `.env` 에 동일 키 추가
+- [ ] (server-side flow 채택 시) GitHub Secrets 에 `GOOGLE_CLIENT_SECRET` 등록 + CD 워크플로우에 주입
+
+---
+
 ## 🤝 FE 협업
 
 ### 현재 노출된 API (PR #27 release 이후)
@@ -442,4 +511,5 @@ MYSQL_PWD="$RDS_PASSWORD" mysql -h "$RDS_ENDPOINT" -u "$RDS_USERNAME" moodiary -
 | 2026-05-26 | **운영 부팅 폭발 대사건** ([T-019](./troubleshooting.md#t-019)) — PR #38 CORS 검증 중 발견. 5층 결함 동시 노출: SSM agent 죽음 + CD silent fail + springdoc 2.8.3 ↔ Spring Boot 4 비호환 + ApplicationContext 안전망 부재 + `docker compose` (스페이스) ≠ `docker-compose` (하이픈). 복구: springdoc → 3.0.3, `MoodiaryApplicationTests` `@Disabled` 제거, RDS orphan post 클린업, CD 워크플로우에 SSM `wait command-executed` + health check 추가, image 태그 `:${{ github.sha }}` 함께 push. 옛 CD 들이 사실은 한 번도 자동 deploy 에 성공한 적 없었던 진실까지 드러남. |
 | 2026-05-26 | **Workflow 규칙 일반화** ([T-020](./troubleshooting.md#t-020)) — 머지된 PR 본문을 사후 수정한 사고. CLAUDE.md 의 트리거를 "PR 생성 / 추가 push 전" 만이 아니라 "`gh pr` 으로 시작하는 거의 모든 명령 전" 으로 일반화. T-015 → T-018 → T-020 세 번째 재발. |
 | 2026-05-26 | **GitHub Pages 인프라 신설** — landing page (`site/index.html`) + Marp 슬라이드 자동 배포 (`/slides/`). `main` push 시 GitHub Actions 가 자동 build & deploy. 졸업 심사 / 교수 공유용 단일 URL 확보. 백로그 PR 9 (MkDocs Material 풀 문서 사이트) 신설 — 같은 인프라 위에 `claude-docs/*` 통합 예정. |
+| 2026-05-26 | **인증 강화 백로그 추가** (PR 10 Refresh Token, PR 11 OAuth2 Resource Server, PR 12 소셜 로그인). 현재 access-only 24h JWT 의 보안/UX trade-off 해소 (PR 10), 표준 Resource Server 로 리팩토링 (PR 11, 선택), 졸업 데모 가시성용 Google/Kakao 로그인 (PR 12). 의존성 라인: PR 2 (완료) → PR 10 → {PR 11 (선택), PR 12}. API 상세는 각 PR 시작 시 `api-contracts.md` 에 작성 — 이번 PR 은 plan.md 만 갱신. |
 
