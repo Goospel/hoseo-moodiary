@@ -26,6 +26,8 @@
   - [Auth](#auth)
     - [POST /auth/signup](#post-authsignup)
     - [POST /auth/login](#post-authlogin)
+    - [POST /auth/refresh](#post-authrefresh)
+    - [POST /auth/logout](#post-authlogout)
   - [Post](#post)
     - [POST /post](#post-post)
     - [GET /post](#get-post)
@@ -48,7 +50,9 @@
 | 기능 | Method | URL | 인증 헤더 | Body | 성공 응답 |
 |---|---|---|---|---|---|
 | 회원가입 | `POST` | `/auth/signup` | ❌ 불필요 | ✅ JSON | `201` UUID 문자열 |
-| 로그인 | `POST` | `/auth/login` | ❌ 불필요 | ✅ JSON | `200` `{ accessToken, userId }` |
+| 로그인 | `POST` | `/auth/login` | ❌ 불필요 | ✅ JSON | `200` `{ accessToken, refreshToken, userId }` |
+| 토큰 갱신 | `POST` | `/auth/refresh` | ❌ 불필요 | ✅ JSON | `200` `{ accessToken, refreshToken }` (rotation) |
+| 로그아웃 | `POST` | `/auth/logout` | ❌ 불필요 | ✅ JSON | `204` (바디 없음) |
 | 게시글 작성 | `POST` | `/post` | ✅ 필수 | ✅ JSON | `201` UUID 문자열 |
 | 내 게시글 전체 조회 | `GET` | `/post` | ✅ 필수 | ❌ | `200` `PostResponseDto[]` |
 | 게시글 단건 조회 | `GET` | `/post/{id}` | ✅ 필수 | ❌ | `200` `PostResponseDto` |
@@ -179,7 +183,7 @@ Content-Type: application/json
 ---
 
 #### `POST /auth/login`
-이메일/비밀번호로 로그인. 성공 시 JWT access token 발급. 이후 보호된 엔드포인트는 `Authorization: Bearer <accessToken>` 헤더 첨부.
+이메일/비밀번호로 로그인. 성공 시 access token (1시간 수명) + refresh token (2주 수명) 같이 발급. 이후 보호된 엔드포인트는 `Authorization: Bearer <accessToken>` 헤더 첨부.
 
 **Headers**
 ```
@@ -198,18 +202,119 @@ Content-Type: application/json
 ```json
 {
   "accessToken": "eyJhbGciOiJIUzI1NiJ9...",
+  "refreshToken": "Xy7-aBcD...",
   "userId": "9c4d401e-63ba-413e-abbe-a6d5cf869f0e"
 }
 ```
 
-- `accessToken` — JWT, 이후 모든 보호된 요청의 `Authorization` 헤더에 `Bearer <accessToken>` 형태로 첨부
+- `accessToken` — JWT (HS256). 1시간 수명. 이후 모든 보호된 요청의 `Authorization` 헤더에 `Bearer <accessToken>` 형태로 첨부
+- `refreshToken` — 32-byte secure random (base64). **2주 수명**. access 만료 시 `POST /auth/refresh` 로 갱신
 - `userId` — 로그인된 사용자 UUID (FE 가 캐싱해두면 편리)
 
-> 📌 **만료시간 / refresh token**: 현재 만료시간은 `JwtProperties` 의 `expirationMs` 로 설정. Refresh token 은 아직 미도입 — 만료되면 재로그인.
+> 📌 **토큰 수명** (PR 10):
+> - access token = **1시간** (`JWT_ACCESS_EXPIRATION_MS`, 기본 3,600,000ms)
+> - refresh token = **2주** (`JWT_REFRESH_EXPIRATION_MS`, 기본 1,209,600,000ms)
+> - **Rotation 적용**: refresh 호출마다 기존 토큰 무효화 + 새 토큰 발급 → 탈취된 refresh 가 한 번만 유효
+
+> ⚠️ **FE 보관 정책**: 두 토큰 모두 localStorage 저장 (현재 패턴). XSS 노출 시 둘 다 위험 — 향후 cookie 전환 시점은 PR 11/12 후속에서 재검토.
 
 **에러**
 - `400` — 이메일/비밀번호 빈 값 (`@NotBlank`)
 - `401` — `{"message": "이메일 또는 비밀번호가 올바르지 않습니다."}` (이메일 미존재와 비번 틀림을 구분하지 않음 — 사용자 enumeration 방지)
+
+---
+
+#### `POST /auth/refresh`
+Refresh token 으로 새 access + 새 refresh 발급. **Rotation 적용** — 기존 refresh 는 즉시 무효화.
+
+**Headers**
+```
+Content-Type: application/json
+```
+
+**Request**
+```json
+{
+  "refreshToken": "Xy7-aBcD..."
+}
+```
+
+**Response — 200 OK**
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiJ9...",
+  "refreshToken": "AnotherRandomToken..."
+}
+```
+
+- 응답으로 받은 **새 refresh 를 즉시 저장** + 기존 refresh 는 폐기. 동일 refresh 로 두 번 호출 시 두 번째는 **401**.
+
+**FE 호출 패턴**:
+```typescript
+// access 만료 401 받으면 자동 갱신 → 원래 요청 재시도
+async function refreshToken() {
+  const stored = localStorage.getItem('refreshToken');
+  const res = await fetch('/auth/refresh', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken: stored })
+  });
+  if (!res.ok) {
+    // refresh 도 만료 → 재로그인 페이지로
+    return null;
+  }
+  const { accessToken, refreshToken } = await res.json();
+  localStorage.setItem('accessToken', accessToken);
+  localStorage.setItem('refreshToken', refreshToken);
+  return accessToken;
+}
+```
+
+**에러**
+- `400` — `refreshToken` 빈 값 (`@NotBlank`)
+- `401` — `{"message": "유효하지 않은 refresh token 입니다."}` (존재 X / 만료 / 이미 revoke — 정보 노출 최소화 위해 셋 다 같은 메시지)
+
+---
+
+#### `POST /auth/logout`
+Refresh token 을 무효화. Access token 은 stateless 라 서버에서 즉시 차단 불가 — **FE 는 logout 호출과 함께 localStorage 의 토큰들도 즉시 제거**해야 함.
+
+**Headers**
+```
+Content-Type: application/json
+```
+
+**Request**
+```json
+{
+  "refreshToken": "Xy7-aBcD..."
+}
+```
+
+**Response — 204 No Content** (응답 body 없음)
+
+> 📌 **Idempotent** — 이미 무효화된 토큰 / 존재하지 않는 토큰을 보내도 204. 사용자가 logout 을 두 번 눌러도 동일.
+
+**FE 호출 패턴**:
+```typescript
+async function logout() {
+  const refresh = localStorage.getItem('refreshToken');
+  if (refresh) {
+    await fetch('/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: refresh })
+    });
+  }
+  // BE 응답 무관하게 로컬도 즉시 클리어
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('refreshToken');
+  // 로그인 페이지로 redirect
+}
+```
+
+**에러**
+- `400` — `refreshToken` 빈 값
 
 ---
 
