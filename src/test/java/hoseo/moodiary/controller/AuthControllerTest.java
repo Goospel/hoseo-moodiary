@@ -3,11 +3,15 @@ package hoseo.moodiary.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import hoseo.moodiary.config.SecurityConfig;
 import hoseo.moodiary.dto.request.LoginRequestDto;
+import hoseo.moodiary.dto.request.LogoutRequestDto;
+import hoseo.moodiary.dto.request.TokenRefreshRequestDto;
 import hoseo.moodiary.dto.request.UserSignupRequestDto;
 import hoseo.moodiary.dto.response.LoginResponseDto;
+import hoseo.moodiary.dto.response.TokenRefreshResponseDto;
 import hoseo.moodiary.exception.DuplicateEmailException;
 import hoseo.moodiary.exception.DuplicateNicknameException;
 import hoseo.moodiary.exception.InvalidCredentialsException;
+import hoseo.moodiary.exception.InvalidRefreshTokenException;
 import hoseo.moodiary.security.JwtTokenProvider;
 import hoseo.moodiary.service.UserService;
 import org.junit.jupiter.api.DisplayName;
@@ -23,6 +27,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
@@ -33,11 +38,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * AuthController 웹 레이어 단위 테스트 ({@code POST /auth/signup}).
+ * AuthController 웹 레이어 단위 테스트.
  *
- * <p>{@link SecurityConfig}를 명시적으로 임포트해야 한다.
- * 이 설정은 {@code @WebMvcTest}의 기본 컴포넌트 스캔에 포함되지 않기 때문에,
- * 임포트하지 않으면 Spring Security 기본값(전부 인증 요구)이 적용되어 회원가입 호출 자체가 401이 된다.
+ * <p>{@link SecurityConfig}를 명시적으로 임포트해야 한다 — 이 설정은 {@code @WebMvcTest}의 기본
+ * 컴포넌트 스캔에 포함되지 않아 임포트하지 않으면 Spring Security 기본값(전부 인증 요구) 적용 → 회원가입 호출 자체가 401.
  */
 @WebMvcTest(AuthController.class)
 @Import(SecurityConfig.class)
@@ -156,11 +160,12 @@ class AuthControllerTest {
         }
 
         @Test
-        @DisplayName("이메일/비밀번호 정상이면 200과 accessToken + userId 를 반환한다")
+        @DisplayName("이메일/비밀번호 정상이면 200과 accessToken + refreshToken + userId 셋 다 반환한다")
         void success() throws Exception {
             UUID userId = UUID.randomUUID();
             given(userService.login(any(LoginRequestDto.class))).willReturn(LoginResponseDto.builder()
                     .accessToken("issued.jwt.token")
+                    .refreshToken("issued-refresh-token")
                     .userId(userId)
                     .build());
 
@@ -169,6 +174,7 @@ class AuthControllerTest {
                             .content(loginBody("a@b.com", "password123")))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.accessToken").value("issued.jwt.token"))
+                    .andExpect(jsonPath("$.refreshToken").value("issued-refresh-token"))
                     .andExpect(jsonPath("$.userId").value(userId.toString()));
         }
 
@@ -205,6 +211,88 @@ class AuthControllerTest {
                             .content(loginBody("a@b.com", "wrong")))
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.message").value("이메일 또는 비밀번호가 올바르지 않습니다."));
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /auth/refresh — 토큰 갱신")
+    class Refresh {
+
+        private String refreshBody(String token) throws Exception {
+            return objectMapper.writeValueAsString(TokenRefreshRequestDto.builder().refreshToken(token).build());
+        }
+
+        @Test
+        @DisplayName("정상 refresh 면 200과 새 access + 새 refresh 반환")
+        void success() throws Exception {
+            given(userService.refresh("old-refresh")).willReturn(TokenRefreshResponseDto.builder()
+                    .accessToken("new.access.jwt")
+                    .refreshToken("new-refresh")
+                    .build());
+
+            mockMvc.perform(post("/auth/refresh")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(refreshBody("old-refresh")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.accessToken").value("new.access.jwt"))
+                    .andExpect(jsonPath("$.refreshToken").value("new-refresh"));
+        }
+
+        @Test
+        @DisplayName("refresh token 이 빈 값이면 400 + service 미호출")
+        void blank() throws Exception {
+            mockMvc.perform(post("/auth/refresh")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(refreshBody("")))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("refresh token 은 필수입니다."));
+
+            verify(userService, never()).refresh(any());
+        }
+
+        @Test
+        @DisplayName("유효하지 않은 refresh 면 401과 통일 메시지")
+        void invalid() throws Exception {
+            willThrow(new InvalidRefreshTokenException())
+                    .given(userService).refresh("invalid");
+
+            mockMvc.perform(post("/auth/refresh")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(refreshBody("invalid")))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.message").value("유효하지 않은 refresh token 입니다."));
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /auth/logout — 로그아웃")
+    class Logout {
+
+        private String logoutBody(String token) throws Exception {
+            return objectMapper.writeValueAsString(LogoutRequestDto.builder().refreshToken(token).build());
+        }
+
+        @Test
+        @DisplayName("정상 logout 이면 204 + service.logout 호출")
+        void success() throws Exception {
+            mockMvc.perform(post("/auth/logout")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(logoutBody("some-refresh")))
+                    .andExpect(status().isNoContent());
+
+            verify(userService).logout(eq("some-refresh"));
+        }
+
+        @Test
+        @DisplayName("refresh token 이 빈 값이면 400 + service 미호출")
+        void blank() throws Exception {
+            mockMvc.perform(post("/auth/logout")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(logoutBody("")))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("refresh token 은 필수입니다."));
+
+            verify(userService, never()).logout(any());
         }
     }
 }

@@ -31,6 +31,12 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponseDto.builder().message(e.getMessage()).build());
     }
 
+    @ExceptionHandler(InvalidRefreshTokenException.class)
+    public ResponseEntity<ErrorResponseDto> handleInvalidRefreshToken(InvalidRefreshTokenException e) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ErrorResponseDto.builder().message(e.getMessage()).build());
+    }
+
     @ExceptionHandler(PostAccessDeniedException.class)
     public ResponseEntity<ErrorResponseDto> handlePostAccessDenied(PostAccessDeniedException e) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
