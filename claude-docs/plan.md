@@ -7,6 +7,7 @@
 > - [`api-contracts.md`](./api-contracts.md) — API 명세 (request/response/예시/외부 AI 계약)
 > - [`security.md`](./security.md) — JWT / 비밀번호 / 시크릿 / 인가 / 약점
 > - [`troubleshooting.md`](./troubleshooting.md) — 막힘 + 원인 + 해결 로그 (지속 누적)
+> - [`learning-notes.md`](./learning-notes.md) — 모르고 물어봐서 배운 기술 개념 정리 (발표 / Q&A 대비)
 > - [`ops-runbooks/ec2-cheatsheet.md`](./ops-runbooks/ec2-cheatsheet.md) — EC2 운영 치트시트
 > - [Swagger UI](http://15.165.95.129:8080/swagger-ui/index.html) — 구현된 API 의 실시간 진실의 원천
 
