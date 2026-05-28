@@ -108,6 +108,14 @@ jobs:
             -e 's|\.\./README\.md|project-readme.md|g' \
             -e 's|(README\.md)|(project-readme.md)|g'
 
+          # 4b) T-030: project-readme.md (저장소 루트 README) 안의 상대 링크들 외부화.
+          #     저장소 README 는 GitHub UI 친화 경로로 './claude-docs/X.md', './CLAUDE.md', './compose.yaml' 같이 디렉토리 구조 그대로 박는다.
+          #     하지만 MkDocs 빌드 사본은 docs/ 안으로 평면화되어 './claude-docs/X.md' 가 깨짐.
+          #     해결: README 안의 모든 './X' 상대 링크를 GitHub blob URL 로 외부화 — 사이트 검색은 nav 로 들어가고,
+          #     README 의 진입 링크들은 원본 GitHub 파일을 새 탭에서 열어주는 의도.
+          sed -i -E 's|\]\(\./([^)]+)\)|](https://github.com/Goospel/hoseo-moodiary/blob/dev/\1)|g' \
+            docs-site/docs/project-readme.md
+
           # 5) MkDocs build → _site/docs/
           cd docs-site
           mkdocs build --site-dir ../_site/docs --strict
