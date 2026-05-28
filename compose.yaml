@@ -13,6 +13,10 @@
 #   APP_CORS_ALLOWED_ORIGINS  — 콤마 구분 origin 목록. 운영 frontend (S3 endpoint) + 로컬 dev origins.
 #                               누락 시 application.yaml 기본값 (localhost:3000,localhost:5173) 으로 동작 — 운영에서는 S3 origin
 #                               차단됨 → FE 가 호출 못 함. PR 8 시리즈 참조.
+#   OAUTH2_CLIENT_MODE        — OAuth2 provider 모드 토글: `stub` (외부 HTTP 없이 Stub, 기본값) / `http` (실제 Google tokeninfo 호출).
+#                               운영은 반드시 `http`. 누락 시 Stub 동작 → 운영에서도 가짜 토큰 검증. PR 12-final 참조.
+#   GOOGLE_OAUTH_CLIENT_ID    — Google Cloud Console OAuth 2.0 클라이언트 ID (`xxxxx.apps.googleusercontent.com`).
+#                               Google tokeninfo 응답의 audience 검증 (confused deputy 방어) 에 사용. OAUTH2_CLIENT_MODE=http 일 때 필수.
 #
 # 운영 갱신 흐름
 # 1) push → main → GitHub Actions CD
@@ -48,3 +52,9 @@ services:
       #    "정의된 빈 값" 으로 받아 기본값 무시 → 모든 CORS 차단. compose 의 `:-` 문법으로
       #    여기서 default 를 박아 application.yaml 의 기본값 대신 이 줄이 source of truth.
       - APP_CORS_ALLOWED_ORIGINS=${APP_CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      # OAuth2 (PR 12-final) — Stub / 실 HTTP 토글 + Google client_id.
+      # OAUTH2_CLIENT_MODE 가 EC2 .env 에 없으면 `stub` 으로 떨어져 운영에서도 Stub 동작 (가짜 토큰 통과) — 운영은 `http` 필수.
+      # GOOGLE_OAUTH_CLIENT_ID 가 누락되면 `dummy` 로 떨어지고, http 모드일 때 모든 토큰의 audience 검증이 실패 → 401.
+      # 같은 CORS 의 `:-` 패턴 사용 (T-022 기억 — .env 빈 값 ≠ 미설정).
+      - OAUTH2_CLIENT_MODE=${OAUTH2_CLIENT_MODE:-stub}
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-dummy}
