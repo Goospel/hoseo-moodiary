@@ -1,7 +1,7 @@
 # Moodiary Backend — Roadmap
 
 > 백엔드 작업의 **현재 위치 + 다음 경로**. PR 머지 시 갱신.
-> 마지막 갱신: 2026-05-28 (PR #76 PR 12-pre OAuth2 Stub 머지 + PR 12-final Google 실어댑터 진행 중 — Kakao 졸업프로젝트 범위 제외)
+> 마지막 갱신: 2026-05-29 (release PR #79 + hot-fix release PR #81 — PR 12 Google OAuth2 풀체인 운영 반영 완료. T-031/T-032 함정 박힘.)
 >
 > 📚 **상세는 다른 문서로 위임**:
 > - [`api-contracts.md`](./api-contracts.md) — API 명세 (request/response/예시/외부 AI 계약)
@@ -18,10 +18,10 @@
 | 항목 | 값 |
 |---|---|
 | **운영 URL** | http://15.165.95.129:8080 (Elastic IP, 고정) |
-| **운영 반영** | Post CRUD + 인증 (회원가입 / JWT 로그인 / **Refresh Token rotation**) + 소유권 + **PR 4-pre 비동기 AI 골격 (Stub)** |
+| **운영 반영** | Post CRUD + 인증 (회원가입 / JWT 로그인 / Refresh Token rotation / **Google OAuth2 소셜 로그인**) + 소유권 + PR 4-pre 비동기 AI 골격 (Stub) + **MkDocs 문서 사이트 (`/docs/`)** |
 | **dev 에만** | Calendar API (emoji=null 임시) |
 | **외부 대기** | PR 4-final (AI 합의), PR 8 후반 (FE S3 endpoint 회신) |
-| **다음 핵심 경로** | PR 8 (가시성, 외부 대기) ‖ PR 4-final (외부 대기) → PR 5 후속 (emoji JOIN) → PR 6 (Flyway baseline) ‖ **진행 중: PR 12-final (Google 실어댑터)** |
+| **다음 핵심 경로** | PR 8 (가시성, FE 회신 대기) ‖ PR 4-final (AI 합의 대기) → PR 5 후속 (emoji JOIN) → PR 6 (Flyway baseline) |
 | **스택** | Java 25 / Spring Boot 4.0.6 / EC2 + RDS MySQL 9 |
 
 ---
@@ -41,8 +41,8 @@
 | **PR 9 MkDocs (단독)** | #72, #73, #74 | `/docs/` 에 Material 테마 문서 사이트. claude-docs/\* + README 한 곳 검색. 사이트 홈 + 로드맵 + API 명세 + 보안 + 트러블슈팅 + 학습 노트 + 운영 Runbook + README 모두 nav. **strict 빌드 컨벤션 함정 2건 박힘** ([T-029](./troubleshooting.md#t-029) / [T-030](./troubleshooting.md#t-030)). |
 | **AI 응답 골격** | #59 | `AiResponse` 엔티티 + `AiResponseClient` Stub + `@Async` + `GET /post/{id}/ai-response` |
 | **학습 파이프라인 (PKM)** | #67, #70 | `learning-notes.md` 신설 (12 항목) + 3개 항목 ([Spring 비동기 / AWS SSM 메커니즘 / CORS](https://goospel.github.io/notes/)) goospel.github.io 공개판 첫 승격 |
-| **PR 12-pre OAuth2 Stub** | #76 | `User` 엔티티에 provider/providerId 필드 + UNIQUE(provider, providerId) + `createLocal()` / `createOAuth2()` factory. `OAuth2Provider` interface + `StubOAuth2Provider` (`stub:{PROVIDER}:{providerId}:{email}:{nickname}` 형식). `POST /auth/oauth2/{provider}` 컨트롤러. 이메일 중복 정책 409 / LOCAL provider reject 401. 외부 Console 셋업 / HTTP 의존 없이 인증 흐름 단독 진행 가능. |
-| **테스트** | 누적 | 100+ pass — Controller 슬라이스 + Service 단위 + JWT 라운드트립 + CORS preflight + Refresh rotation + OAuth2 Stub + (PR 12-final) WireMock Google tokeninfo |
+| **PR 12 Google OAuth2 (풀체인)** | #76, #77, #78, #79, #80, #81 | **운영 반영 완료**. token-exchange 패턴 — FE 가 Google Sign-In 으로 id_token 받아 BE 에 POST → BE 가 Google `tokeninfo` 호출 + `aud` (confused deputy 방어) + `email_verified` 검증 → DB 의 (provider, providerId) 조회 → 신규/기존 분기 + JWT 발급. `oauth2.client.mode=stub\|http` 토글로 dev/운영 분리. **Kakao 제외** (졸업프로젝트 범위). `users` 테이블 ALTER 4건 (provider/providerId/password nullable/UNIQUE) 사전 적용. 운영 deploy 직후 [T-031](./troubleshooting.md#t-031) (path enum case-sensitivity) + [T-032](./troubleshooting.md#t-032) (silent 500 진단 가림막) 함정 발견 → hot-fix release PR #81 로 박음. |
+| **테스트** | 누적 | 120+ pass — Controller 슬라이스 + Service 단위 + JWT 라운드트립 + CORS preflight + Refresh rotation + OAuth2 Stub + WireMock Google tokeninfo + OAuth2 path case 5종 |
 
 ---
 
@@ -52,8 +52,7 @@
 |---|---|---|
 | **PR 4-final** — AI HTTP 어댑터 + Retry + WireMock | ⏸ 0% | AI 담당자 외부 합의 ([api-contracts.md#합의-항목-체크리스트](./api-contracts.md#합의-항목-체크리스트)) |
 | **PR 5** — Calendar API (`GET /calendar?year=YYYY&month=MM`) | 🟡 85% | dev 머지 완료. emoji LEFT JOIN + `(user_id, created_at)` 인덱스는 PR 4-final 후 후속 PR |
-| **PR 8 후반** — 프론트 S3 배포 + 통합 검증 | 🟡 50% | BE CORS ✅. FE 가 [`ops-runbooks/frontend-s3-cd-setup.md`](./ops-runbooks/frontend-s3-cd-setup.md) 따라 셋업 + S3 endpoint URL 회신 대기 |
-| **PR 12-final** — Google OAuth2 실어댑터 | 🟢 100% (이 PR) | `HttpGoogleOAuth2Provider` (`RestClient` + `tokeninfo` endpoint, aud / email_verified 검증) + WireMock 단위 테스트 + `oauth2.client.mode` 토글 (stub/http). Kakao 제거. 운영 머지 전 GitHub Secrets / EC2 `.env` 에 `GOOGLE_OAUTH_CLIENT_ID` + `OAUTH2_CLIENT_MODE=http` 주입 필요. |
+| **PR 8 후반** — 프론트 S3 배포 + 통합 검증 | 🟡 50% | BE CORS ✅. FE 가 [`ops-runbooks/frontend-s3-cd-setup.md`](./ops-runbooks/frontend-s3-cd-setup.md) 따라 셋업 + S3 endpoint URL 회신 대기. **OAuth2 통합** 도 같이 검증 가능해짐 (PR 12 풀체인 운영 안착). |
 
 ---
 
@@ -68,7 +67,7 @@ PR 11 (OAuth2 Resource Server) ── 선택, 먼 미래 (PR 10 ✅ 정착 후 �
 PR 7 (ECS 이전)           ── 먼 미래, HTTPS/도메인 도입 시
 ```
 
-> PR 10 (Refresh Token) 은 #63/#66, PR 9 (MkDocs) 는 #72~#74, **PR 12-pre 는 #76 으로 완료 이동**. PR 12-final 은 이 PR 로 진행 중. PR 11 의 "PR 10 권장" 의존도 해소.
+> **PR 12 Google OAuth2 풀체인 #76 ~ #81** 운영 반영 완료 — backlog → 완료. 외부 Console 셋업 (Google Cloud Console) + RDS 사전 ALTER 4건 (users) + env 3-way sync 모두 끝. release PR #79 + hot-fix #81 두 사이클. PR 10/9 도 이미 완료 이동. PR 11 의 "PR 10 권장" 의존도 해소.
 
 > 각 PR 의 **구현 체크리스트 / 위험 / 운영 머지 전 필수 항목**은 해당 PR 시작 시점에 PR body 에 작성한다.
 > plan.md 는 "무엇 / 왜 / 의존" 까지만.
@@ -97,19 +96,6 @@ PR 7 (ECS 이전)           ── 먼 미래, HTTPS/도메인 도입 시
 **Why**: 수동 `JwtAuthenticationFilter` → Spring Security 표준 Resource Server. 검증 / 클레임 추출 / JWK 도입 자연스러움.
 **고려 분기점**: 자체 발급 유지 vs 외부 IdP, 토큰 호환성 (소프트 전환), `JwtAuthenticationConverter` 로 UUID principal 추출, 발급 코드만 보존.
 **의존**: PR 10 ✅ — 큰 리팩토링 안전한 시점. **위험**: 졸업프로젝트 범위 초과 가능 — "시간 남으면" 카테고리.
-
-### PR 12 — 소셜 로그인 (Google) 🔐 ⭐⭐⭐ — **PR 12-pre ✅ / PR 12-final 이 PR**
-**Why**: 졸업 발표에 "구글로 로그인 한 줄" 임팩트 큼.
-**범위 분할**:
-- **PR 12-pre (#76 ✅)** — `User` 엔티티 provider/providerId + `OAuth2Provider` interface + `StubOAuth2Provider` (외부 Console / HTTP 없이 단독 검증) + `POST /auth/oauth2/{provider}` + 이메일 중복 정책 409. 외부 의존성 차단 해소.
-- **PR 12-final (이 PR)** — `HttpGoogleOAuth2Provider` (`tokeninfo` endpoint, aud / email_verified 검증) + WireMock 단위 테스트 + `oauth2.client.mode=stub|http` 토글.
-**Kakao 제외 사유**: 졸업프로젝트 범위에서 Kakao Developers 의 "사이트 도메인 localhost 거부" 가 FE 배포 선행 요구 → 외부 마찰 큰 데 비해 학습 가치가 Google 과 거의 동일. OAuth2 기능 구현 자체가 메인 학습 목표라 한 provider 로 충분. **부활 비용 작음**: AuthProvider enum 에 KAKAO 추가 + HttpKakaoOAuth2Provider 1개 추가.
-**고려 분기점 (해소됨)**:
-- 이메일 중복 정책 (LOCAL + GOOGLE 양쪽 가입 차단) → PR 12-pre 에서 `EmailAlreadyExistsForOtherProviderException` (409) 로 결정.
-- provider 토큰 검증 → Google `tokeninfo?id_token=<token>` 호출, 응답의 `aud` 가 우리 `GOOGLE_OAUTH_CLIENT_ID` 와 일치 + `email_verified=true` 검증.
-- 외부 Console 셋업 (Google Cloud Console OAuth Client ID + 동의 화면 외부 + 테스트 사용자) → 사용자 완료.
-- 환경변수 3중 동기화 (application.yaml placeholder / GitHub Secrets / EC2 `.env`) → 운영 머지 전 사용자 책임.
-**의존**: PR 10 ✅, PR 12-pre ✅.
 
 ### PR 7 — ECS 이전 ⭐ (먼 미래)
 **Why**: 운영 안정성 + 확장성 + HTTPS / 도메인.
@@ -163,6 +149,9 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 | PR 12 분할 (12-pre + 12-final) | OAuth2 외부 Console 셋업 (사용자 책임, 1회) 이 BE 진행을 막는 차단점. Stub 으로 외부 의존성 차단 해소 → BE 만으로 OAuth2 흐름 정착 (12-pre) → 외부 셋업 후 실 어댑터 합류 (12-final). PR 4-pre / 4-final 과 같은 패턴 — **외부 의존성 분리는 차단 해소의 1번 도구**. |
 | Kakao 제외 (PR 12-final) | Kakao Developers 의 "사이트 도메인 localhost 거부" 가 FE S3 배포 선행을 요구 → 졸업프로젝트 범위에서 외부 마찰 큼. 학습 가치 (OAuth2 token-exchange 패턴) 가 Google 과 거의 동일해서 한 provider 로 충분. **부활 비용 작음**: enum 값 + adapter 1개. 졸업 후 부활 시 같은 코드 패턴 복제. |
 | OAuth2 토글 패턴 (`oauth2.client.mode=stub\|http`) | provider 추상화의 활성 구현을 부팅 시점에 결정. dev / 로컬 / 단위테스트 = `stub`, 운영 / 시연 = `http`. `@ConditionalOnProperty` + `matchIfMissing=true` 로 default 가 stub — 외부 키 없어도 부팅됨. 같은 패턴은 PR 4-final 의 `ai.client.mode` 로 재사용 예정. |
+| Path enum case-insensitive 정규화 (#80 T-031 fix) | Spring 기본 `String→Enum` 변환은 case-sensitive. `@PathVariable AuthProvider provider` 가 소문자 `google` path 변환 실패 → `MethodArgumentTypeMismatchException` → generic 500. Swagger 의 "대소문자 무관" promise 와 어긋남. **fix**: controller 가 `String` 으로 받아 `.toUpperCase()` 명시 정규화 + 미지원 값은 `InvalidOAuth2ProviderException` (400). 같은 패턴은 다른 enum path 도입 시 재사용. |
+| GlobalExceptionHandler 의 generic `Exception` 에 ERROR 로깅 (#80 T-032 fix) | `@ExceptionHandler` 가 catch 하면 Spring default exception logging 발동 안 함. 무로깅 silent 500 은 운영 진단 0. 응답 body 는 그대로 (사용자 노출 정보 변경 없음), `log.error("...", e)` 로 stdout 만 풍부. 향후 silent 500 후보 발견의 1차 단서. |
+| Squash release 후 dev → main merge 충돌의 표준 해결 (#79, #81) | main 의 release squash commit 이 dev 의 개별 commit 과 같은 줄 건드려 자동 머지 불가. dev 가 strict semantic superset 임을 명시 검증 후 `git merge origin/main -X ours` 로 자동 해결. 이 sweep 후 push 하면 release PR 이 자동 mergeable. **사용자 OK 필수** — auto classifier 가 처음엔 차단했던 패턴. |
 
 ---
 
@@ -170,7 +159,11 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 
 | 일자 | 변경 |
 |---|---|
-| 2026-05-28 | **PR 12-final 진행 — Google OAuth2 실어댑터 + Kakao 제외** (이 PR) — `HttpGoogleOAuth2Provider` (`RestClient` + tokeninfo + aud / email_verified 검증) + WireMock 단위 테스트 8개 + `oauth2.client.mode` 토글 (`@ConditionalOnProperty` matchIfMissing=stub). `AuthProvider` enum 에서 KAKAO 제거. application.yaml 에 `${GOOGLE_OAUTH_CLIENT_ID:dummy}` + `${GOOGLE_TOKENINFO_URL:...}` + `${OAUTH2_CLIENT_MODE:stub}` placeholder 추가. Kakao 제외 사유는 의사결정 로그 참조. |
+| 2026-05-29 | **release PR #81 — T-031/T-032 hot-fix 운영 반영** — release PR #79 의 deploy 직후 발견된 함정 2건 (path enum case-sensitivity / silent 500 진단 가림막) 의 fix #80 을 main 으로. dev → main merge 충돌은 `-X ours` 패턴으로 자동 해결 (의사결정 로그 참조). 운영 검증: `/auth/oauth2/google` (소문자) → 401 정상 / `/auth/oauth2/twitter` → 400 정상. |
+| 2026-05-29 | **fix PR #80 — OAuth2 path case-insensitive + GlobalExceptionHandler 진단 로깅** — release #79 직후 발견한 두 함정 같이. controller 가 `String` 으로 받아 `.toUpperCase()` 정규화 + 신규 `InvalidOAuth2ProviderException` (400). `@Slf4j` + `log.error` 추가. 테스트 5 케이스 추가 (소/대/혼합 case + 미지원 + LOCAL service-level reject). troubleshooting [T-031](./troubleshooting.md#t-031) / [T-032](./troubleshooting.md#t-032). |
+| 2026-05-29 | **release PR #79 — PR 9 MkDocs + PR 12 Google OAuth2 풀체인 + PKM 첫 사이클 (#67~#78) 운영 반영** — dev → main merge 가 main 의 release squash commit 들과 충돌 → `-X ours` 패턴으로 dev (semantic superset) 우선 자동 해결 후 push. 운영 머지 전 체크리스트 4건 모두 ✅ (compose env passthrough / GitHub Secrets / EC2 .env / RDS ALTER 4건). CD 성공 후 운영 검증에서 [T-031](./troubleshooting.md#t-031) 발견 → 즉시 hot-fix #80 + release #81 사이클로 fix. |
+| 2026-05-28 | **PR 12-final — Google OAuth2 실어댑터 + Kakao 제외 (#77)** — `HttpGoogleOAuth2Provider` (`RestClient` + tokeninfo + aud / email_verified 검증) + WireMock 단위 테스트 8개 + `oauth2.client.mode` 토글 (`@ConditionalOnProperty` matchIfMissing=stub). `AuthProvider` enum 에서 KAKAO 제거. application.yaml 에 `${GOOGLE_OAUTH_CLIENT_ID:dummy}` + `${GOOGLE_TOKENINFO_URL:...}` + `${OAUTH2_CLIENT_MODE:stub}` placeholder 추가. learning-notes 13 추가 (OAuth2 Token-Exchange + audience + email_verified). |
+| 2026-05-28 | **PR 12-compose (#78)** — `compose.yaml` 에 OAuth2 env 2개 (`OAUTH2_CLIENT_MODE` + `GOOGLE_OAUTH_CLIENT_ID`) 컨테이너 주입 + `.env.example` 보충. PR 12-final 의 운영 머지 전 사전 작업. |
 | 2026-05-28 | **PR 12-pre 머지 (#76)** — OAuth2 Stub 흐름 + User 엔티티 provider/providerId 추가. 외부 Console 셋업 / HTTP 의존 없이 BE 만으로 OAuth2 흐름 정착. PR 4-pre 와 같은 외부 의존성 차단 해소 패턴. |
 | 2026-05-28 | **PR 9 MkDocs Material 문서 사이트 완료 (#72 + #73 + #74)** — `/docs/` 에 claude-docs/\* + README + 학습 노트 통합 사이트. 하이브리드 옵션 C (landing 보존 + learning-notes 흡수). strict 빌드 두 fix iteration ([T-029](./troubleshooting.md#t-029) README↔index 자동 충돌 / [T-030](./troubleshooting.md#t-030) README outbound 평면화 충돌 + **patch incompleteness** 경고). 결과 10개 URL 모두 200 OK. |
 | 2026-05-28 | **PKM 공개판 첫 승격 (PR #70)** — learning-notes 항목 10/11/12 (Spring 비동기 / AWS SSM 메커니즘 / CORS) 를 [goospel.github.io](https://goospel.github.io/notes/) 로 일반화 승격. 글로벌 CLAUDE.md PKM 파이프라인 (3-5개 묶음 + 4문 자격 + release 직후 타이밍) 첫 실 적용. 각 항목 헤더에 공개판 링크 마커. |
