@@ -8,6 +8,8 @@ import hoseo.moodiary.dto.request.TokenRefreshRequestDto;
 import hoseo.moodiary.dto.request.UserSignupRequestDto;
 import hoseo.moodiary.dto.response.LoginResponseDto;
 import hoseo.moodiary.dto.response.TokenRefreshResponseDto;
+import hoseo.moodiary.dto.request.OAuth2LoginRequestDto;
+import hoseo.moodiary.entitiy.AuthProvider;
 import hoseo.moodiary.exception.DuplicateEmailException;
 import hoseo.moodiary.exception.DuplicateNicknameException;
 import hoseo.moodiary.exception.InvalidCredentialsException;
@@ -298,6 +300,84 @@ class AuthControllerTest {
                     .andExpect(jsonPath("$.message").value("refresh token 은 필수입니다."));
 
             verify(userService, never()).logout(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /auth/oauth2/{provider} — OAuth2 로그인 (path 검증)")
+    class OAuth2Path {
+
+        private String oauth2Body(String token) throws Exception {
+            return objectMapper.writeValueAsString(new OAuth2LoginRequestDto(token));
+        }
+
+        @Test
+        @DisplayName("소문자 path (`google`) 도 GOOGLE 로 정규화되어 200 반환 — T-031 fix")
+        void lowercase_path_works() throws Exception {
+            UUID userId = UUID.randomUUID();
+            given(oauth2Service.login(eq(AuthProvider.GOOGLE), any())).willReturn(LoginResponseDto.builder()
+                    .accessToken("acc").refreshToken("ref").userId(userId).build());
+
+            mockMvc.perform(post("/auth/oauth2/google")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(oauth2Body("stub:GOOGLE:google-1:a@b.com:A")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.accessToken").value("acc"));
+
+            // controller 가 GOOGLE 로 정규화해서 service 호출했는지 검증
+            verify(oauth2Service).login(eq(AuthProvider.GOOGLE), any());
+        }
+
+        @Test
+        @DisplayName("대문자 path (`GOOGLE`) 도 동일하게 200 반환")
+        void uppercase_path_works() throws Exception {
+            UUID userId = UUID.randomUUID();
+            given(oauth2Service.login(eq(AuthProvider.GOOGLE), any())).willReturn(LoginResponseDto.builder()
+                    .accessToken("acc").refreshToken("ref").userId(userId).build());
+
+            mockMvc.perform(post("/auth/oauth2/GOOGLE")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(oauth2Body("stub:GOOGLE:google-1:a@b.com:A")))
+                    .andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("혼합 case (`Google`) 도 동일하게 200")
+        void mixedCase_path_works() throws Exception {
+            UUID userId = UUID.randomUUID();
+            given(oauth2Service.login(eq(AuthProvider.GOOGLE), any())).willReturn(LoginResponseDto.builder()
+                    .accessToken("acc").refreshToken("ref").userId(userId).build());
+
+            mockMvc.perform(post("/auth/oauth2/Google")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(oauth2Body("stub:GOOGLE:google-1:a@b.com:A")))
+                    .andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("미지원 provider (`twitter`) 면 400 + service 미호출")
+        void unsupportedProvider_returns400() throws Exception {
+            mockMvc.perform(post("/auth/oauth2/twitter")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(oauth2Body("any-token")))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("지원하지 않는 OAuth2 provider: twitter"));
+
+            verify(oauth2Service, never()).login(any(), any());
+        }
+
+        @Test
+        @DisplayName("LOCAL 은 enum 으론 valid 지만 service 단계에서 거절 (401) — controller 는 통과시킴")
+        void localProvider_reachesServiceLayer() throws Exception {
+            // controller 는 LOCAL 도 enum 변환 통과시킴. service (OAuth2VerificationException) 가 막음.
+            willThrow(new hoseo.moodiary.exception.OAuth2VerificationException("LOCAL"))
+                    .given(oauth2Service).login(eq(AuthProvider.LOCAL), any());
+
+            mockMvc.perform(post("/auth/oauth2/local")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(oauth2Body("any")))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.message").value("OAuth2 인증 실패"));
         }
     }
 }

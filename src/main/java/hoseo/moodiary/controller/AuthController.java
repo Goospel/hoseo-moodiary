@@ -8,6 +8,7 @@ import hoseo.moodiary.dto.request.UserSignupRequestDto;
 import hoseo.moodiary.dto.response.LoginResponseDto;
 import hoseo.moodiary.dto.response.TokenRefreshResponseDto;
 import hoseo.moodiary.entitiy.AuthProvider;
+import hoseo.moodiary.exception.InvalidOAuth2ProviderException;
 import hoseo.moodiary.service.UserService;
 import hoseo.moodiary.service.oauth2.OAuth2Service;
 import io.swagger.v3.oas.annotations.Operation;
@@ -63,15 +64,23 @@ public class AuthController {
                     "있으면 로그인, 없으면 신규 가입 + 로그인. 응답은 LOCAL 로그인과 동일한 access + refresh 발급. " +
                     "Stub 모드 (`oauth2.client.mode=stub`): providerAccessToken 이 `stub:{PROVIDER}:{providerId}:{email}:{nickname}` 형식.")
     @ApiResponse(responseCode = "200", description = "OAuth2 로그인 성공 — access + refresh + userId 반환")
-    @ApiResponse(responseCode = "400", description = "path 의 provider 가 GOOGLE 아니거나 providerAccessToken 빈 값")
+    @ApiResponse(responseCode = "400", description = "path 의 provider 가 지원 enum 아니거나 providerAccessToken 빈 값")
     @ApiResponse(responseCode = "401", description = "Provider 측 토큰 검증 실패 (만료 / invalid / audience 불일치 / email_verified=false)")
     @ApiResponse(responseCode = "409", description = "이메일이 이미 다른 provider 로 가입됨")
     @PostMapping("/oauth2/{provider}")
     public ResponseEntity<LoginResponseDto> oauth2Login(
-            @Parameter(description = "OAuth2 provider — 현재 GOOGLE 만 지원. 대소문자 무관 (path 에서 변환).",
-                    example = "GOOGLE")
-            @PathVariable("provider") AuthProvider provider,
+            @Parameter(description = "OAuth2 provider — 현재 GOOGLE 만 지원. 대소문자 무관 — `google` / `GOOGLE` / `Google` 모두 허용 (서버에서 uppercase 정규화).",
+                    example = "google")
+            @PathVariable("provider") String providerName,
             @Valid @RequestBody OAuth2LoginRequestDto requestDto) {
+        // Spring 의 기본 String→Enum 변환은 case-sensitive — REST convention 상 FE 가 소문자로 보내는 경우 다수.
+        // 여기서 명시적으로 uppercase 정규화 후 변환. 실패는 InvalidOAuth2ProviderException (400).
+        AuthProvider provider;
+        try {
+            provider = AuthProvider.valueOf(providerName.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new InvalidOAuth2ProviderException(providerName);
+        }
         return ResponseEntity.ok(oauth2Service.login(provider, requestDto.getProviderAccessToken()));
     }
 
