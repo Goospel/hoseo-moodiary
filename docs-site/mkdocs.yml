@@ -116,4 +116,4 @@ nav:
       - EC2 cheatsheet: ops-runbooks/ec2-cheatsheet.md
       - Frontend S3 CD 셋업: ops-runbooks/frontend-s3-cd-setup.md
       - Post orphan cleanup (2026-05-26): ops-runbooks/post-orphan-cleanup-2026-05-26.md
-  - 프로젝트 README: README.md
+  - 프로젝트 README: project-readme.md
