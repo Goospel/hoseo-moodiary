@@ -48,3 +48,7 @@ out/
 .env
 # Claude Code worktree directory — Agent isolation 이 만드는 sub-repo. 절대 commit 금지.
 .claude/
+
+### MkDocs build artifacts — workflow 가 동적 생성. docs-site/docs-template/ 만 영구 (template + index). ###
+docs-site/docs/
+docs-site/site/

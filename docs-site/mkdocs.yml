@@ -1,0 +1,119 @@
+# MkDocs Material 설정 — Moodiary BE 문서 사이트
+#
+# 빌드 결과:  https://goospel.github.io/hoseo-moodiary/docs/
+# 트리거:     dev push (.github/workflows/deploy-pages.yaml)
+#
+# 컨텐츠 소스: workflow 가 빌드 직전에 다음을 docs/ 안으로 복사:
+#   - 저장소 루트의 README.md     → docs/README.md
+#   - claude-docs/*               → docs/ 안으로 통째 복사 (learning-notes / plan / troubleshooting / api-contracts / security / ops-runbooks/*)
+# (이렇게 분리한 이유 — claude-docs/ 는 Claude 가 보는 작업 가이드 정신을 유지. MkDocs 는 그걸 *읽기 좋은 사이트* 로 한 번 더 가공.)
+
+site_name: Moodiary BE — Docs
+site_description: 호서대 컴퓨터공학부 졸업 BE — 로드맵 / API / 보안 / 트러블슈팅 / 학습 노트
+site_author: Goospel
+site_url: https://goospel.github.io/hoseo-moodiary/docs/
+repo_name: Goospel/hoseo-moodiary
+repo_url: https://github.com/Goospel/hoseo-moodiary
+edit_uri: edit/dev/
+copyright: Moodiary Backend · 호서대 컴퓨터공학부 졸업프로젝트
+
+theme:
+  name: material
+  language: ko
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: 다크 모드
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: 라이트 모드
+  font:
+    text: Pretendard
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Goospel/hoseo-moodiary
+  generator: false
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+plugins:
+  - search:
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+
+# nav 구조 — workflow 가 docs/ 안으로 복사한 후 다음 경로로 참조 가능
+nav:
+  - 홈: index.md
+  - 로드맵: plan.md
+  - API 명세: api-contracts.md
+  - 보안: security.md
+  - 트러블슈팅: troubleshooting.md
+  - 학습 노트: learning-notes.md
+  - 운영 Runbook:
+      - EC2 cheatsheet: ops-runbooks/ec2-cheatsheet.md
+      - Frontend S3 CD 셋업: ops-runbooks/frontend-s3-cd-setup.md
+      - Post orphan cleanup (2026-05-26): ops-runbooks/post-orphan-cleanup-2026-05-26.md
+  - 프로젝트 README: README.md
