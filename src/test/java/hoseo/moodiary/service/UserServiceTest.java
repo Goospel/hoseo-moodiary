@@ -55,7 +55,8 @@ class UserServiceTest {
     private UserService userService;
 
     private static User userWithId(UUID id, String email, String hashed, String nickname) {
-        User user = User.builder().email(email).password(hashed).nickname(nickname).build();
+        // PR 12-pre: User.builder() 가 아니라 createLocal() factory 사용 — provider=LOCAL 명시.
+        User user = User.createLocal(email, hashed, nickname);
         try {
             Field f = User.class.getDeclaredField("id");
             f.setAccessible(true);

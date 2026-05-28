@@ -14,6 +14,7 @@ import hoseo.moodiary.exception.InvalidCredentialsException;
 import hoseo.moodiary.exception.InvalidRefreshTokenException;
 import hoseo.moodiary.security.JwtTokenProvider;
 import hoseo.moodiary.service.UserService;
+import hoseo.moodiary.service.oauth2.OAuth2Service;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -54,6 +55,10 @@ class AuthControllerTest {
 
     @MockitoBean
     private UserService userService;
+
+    /** PR 12-pre — AuthController 가 OAuth2Service 를 주입 받음. 다른 endpoint 테스트와 분리. */
+    @MockitoBean
+    private OAuth2Service oauth2Service;
 
     /** SecurityConfig 가 JwtAuthenticationFilter 빈을 생성할 때 의존성으로 요구. 컨트롤러 테스트에서는 사용 안 함. */
     @MockitoBean
