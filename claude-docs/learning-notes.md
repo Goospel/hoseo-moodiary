@@ -457,6 +457,8 @@ ALTER TABLE ai_response CONVERT TO CHARACTER SET utf8mb4;
 
 ## 10. Spring 비동기 (`@EnableAsync` + `@Async`) — 동기 블로킹 회피 + DB 상태머신 + race 방지
 
+> 🚀 **공개 일반화판**: [Spring 비동기 패턴 — goospel.github.io](https://goospel.github.io/notes/backend/spring-async-pattern/) — Moodiary 맥락 제거된 일반 패턴 노트. 면접 / 외부 공유 시 이쪽 링크 사용.
+
 ### 한 줄 요약
 > `@EnableAsync` 는 스위치, `@Async` 는 표시 — 그 메서드는 별도 스레드 풀에서 실행되어 호출자를 블로킹하지 않는다. AI 서버 호출이 5~30초 걸리는데 사용자가 그동안 기다릴 수 없으니, 일기 저장만 즉시 끝내고 AI 호출은 백그라운드 + DB 의 `PENDING / DONE / FAILED` 상태로 결과 전달 + 클라이언트가 폴링으로 받기 — 큐 없는 단순 구조.
 
@@ -671,6 +673,8 @@ public ResponseEntity<UUID> post(...) {
 
 ## 11. AWS SSM Run Command — outbound polling 구조 + IAM role / 0 인바운드 / send-command 한계
 
+> 🚀 **공개 일반화판**: [AWS SSM Run Command — outbound polling 메커니즘 — goospel.github.io](https://goospel.github.io/notes/ops/aws-ssm-outbound-polling/) — Moodiary 맥락 제거된 일반 패턴 노트. 면접 / 외부 공유 시 이쪽 링크 사용.
+
 ### 한 줄 요약
 > **AWS SSM Run Command** 는 EC2 에 미리 깔린 `amazon-ssm-agent` 가 outbound polling 으로 AWS 큐에서 명령을 받아 root 권한으로 실행하는 구조 — SSH 키 없이 IAM role 만으로 원격 명령 가능, 포트 22 닫고도 됨. `send-command` 는 enqueue 만 보장 (silent fail 가능) — `wait command-executed` + health check 가 있어야 CD 초록불이 진짜 deploy 성공을 의미한다.
 
@@ -880,6 +884,8 @@ aws ssm start-session --target i-xxxxx
 ---
 
 ## 12. CORS — Same-Origin Policy + 브라우저 차단 메커니즘 + Preflight + allowlist vs 와일드카드
+
+> 🚀 **공개 일반화판**: [CORS — SOP + Preflight + allowlist — goospel.github.io](https://goospel.github.io/notes/backend/cors-fundamentals/) — Moodiary 맥락 제거된 일반 패턴 노트. 면접 / 외부 공유 시 이쪽 링크 사용.
 
 ### 한 줄 요약
 > **CORS** 는 브라우저의 Same-Origin Policy (다른 origin 응답 읽기 차단) 의 예외를 **서버 응답 헤더로 명시적 허용** 하는 메커니즘. 인증 / JSON body 같은 비단순 요청은 본 요청 전에 **OPTIONS preflight** 로 사전 확인. 와일드카드 `*` 은 `credentials=true` 와 충돌하므로 정확한 origin allowlist 가 안전한 정책.
@@ -1104,3 +1110,4 @@ CORS 에러는 응답에 ACAO 가 없거나 잘못된 origin 이라 브라우저
 | 2026-05-28 | 10번 추가 — Spring 비동기 (`@EnableAsync` + `@Async` + DB 상태머신 + race 방지). 발표 슬라이드 5번 "비동기 \| @EnableAsync + ThreadPoolTaskExecutor" 한 줄의 배경 이해 정리. |
 | 2026-05-28 | 11번 추가 — AWS SSM Run Command (outbound polling + IAM role + send-command 한계 + wait/health check 안전망). 기존 7번이 "자동화 범위" 라면 11번은 "SSM 자체의 작동 원리" 로 각도 분리. |
 | 2026-05-28 | 12번 추가 — CORS (SOP / Preflight / allowlist vs 와일드카드). 발표 슬라이드 21번 "보안 — CORS" 정책의 배경 이해. 본인이 "CORS가 뭐야?" 발화로 트리거. |
+| 2026-05-28 | **10/11/12 → goospel.github.io 공개판 승격** — [spring-async-pattern](https://goospel.github.io/notes/backend/spring-async-pattern/) / [aws-ssm-outbound-polling](https://goospel.github.io/notes/ops/aws-ssm-outbound-polling/) / [cors-fundamentals](https://goospel.github.io/notes/backend/cors-fundamentals/). 4문 자격 통과 (일반화 가능 / 본인 이해 확립 / 같은 스택 누구나 만남 / 검색 키워드 유효) + release PR #66 직후 묶음 임계 (3개) 도달. 글로벌 CLAUDE.md PKM 파이프라인 첫 실 적용. 각 항목 헤더에 공개판 링크 박음. |
