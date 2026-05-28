@@ -110,23 +110,24 @@ class OAuth2ServiceTest {
         @Test
         @DisplayName("닉네임 충돌 → suffix '-{providerId 앞 4자}' 부여")
         void nicknameCollision_appendsSuffix() {
-            String accessToken = "stub:KAKAO:kakao-9876:bob@example.com:Bob";
-            OAuth2UserInfo info = new OAuth2UserInfo("kakao-9876", "bob@example.com", "Bob");
+            // providerId 앞 4자 = "goog" — suffix 형성 검증.
+            String accessToken = "stub:GOOGLE:google-987:bob@example.com:Bob";
+            OAuth2UserInfo info = new OAuth2UserInfo("google-987", "bob@example.com", "Bob");
             given(oauth2Provider.verifyAndExtract(accessToken)).willReturn(info);
-            given(userRepository.findByProviderAndProviderId(AuthProvider.KAKAO, "kakao-9876")).willReturn(Optional.empty());
+            given(userRepository.findByProviderAndProviderId(AuthProvider.GOOGLE, "google-987")).willReturn(Optional.empty());
             given(userRepository.findByEmail("bob@example.com")).willReturn(Optional.empty());
             given(userRepository.existsByNickname("Bob")).willReturn(true);          // 충돌
-            given(userRepository.existsByNickname("Bob-kaka")).willReturn(false);    // suffix 후 OK
+            given(userRepository.existsByNickname("Bob-goog")).willReturn(false);    // suffix 후 OK
             UUID newId = UUID.randomUUID();
-            given(userRepository.save(any(User.class))).willReturn(savedUserWithId(newId, AuthProvider.KAKAO, "kakao-9876", "bob@example.com", "Bob-kaka"));
+            given(userRepository.save(any(User.class))).willReturn(savedUserWithId(newId, AuthProvider.GOOGLE, "google-987", "bob@example.com", "Bob-goog"));
             given(jwtTokenProvider.createAccessToken(newId)).willReturn("ACC");
             given(refreshTokenService.issue(newId)).willReturn("REF");
 
-            oauth2Service.login(AuthProvider.KAKAO, accessToken);
+            oauth2Service.login(AuthProvider.GOOGLE, accessToken);
 
             ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
             verify(userRepository).save(userCaptor.capture());
-            assertThat(userCaptor.getValue().getNickname()).isEqualTo("Bob-kaka");
+            assertThat(userCaptor.getValue().getNickname()).isEqualTo("Bob-goog");
         }
     }
 

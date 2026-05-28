@@ -2,37 +2,36 @@ package hoseo.moodiary.service.oauth2;
 
 import hoseo.moodiary.entitiy.AuthProvider;
 import hoseo.moodiary.exception.OAuth2VerificationException;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
- * PR 12-pre 단계의 Stub OAuth2 Provider — 외부 Console 셋업 / HTTP 호출 없이 OAuth2 흐름을 단독으로 진행 가능하게 한다.
+ * Stub OAuth2 Provider — 외부 Console 셋업 / HTTP 호출 없이 OAuth2 흐름을 단독으로 진행 가능하게 한다.
  *
- * <p><b>토큰 형식 — `stub:{provider}:{providerId}:{email}:{nickname}`</b>:
+ * <p>활성화 조건: {@code oauth2.client.mode=stub} (기본값). 운영 / 시연에선 {@code http} 로 전환되어 비활성.
+ *
+ * <p><b>토큰 형식 — {@code stub:{provider}:{providerId}:{email}:{nickname}}</b>:
  * <ul>
  *   <li>예: {@code stub:GOOGLE:google-123:alice@example.com:Alice}</li>
- *   <li>예: {@code stub:KAKAO:kakao-456:bob@example.com:Bob}</li>
  * </ul>
  *
  * <p>형식이 깨지거나 prefix 가 {@code stub:} 가 아니면 {@link OAuth2VerificationException} (401).
  *
- * <p>이 Stub 은 단일 구현으로 GOOGLE / KAKAO 양쪽을 처리한다 — {@link #provider()} 는 의미상 사용 안 됨 (controller 에서 path 의 provider 사용).
- * PR 12-final 단계에서는 provider 별 실 HTTP 어댑터 (HttpGoogleOAuth2Provider / HttpKakaoOAuth2Provider) 가 등장하며
- * {@code OAuth2ProviderRegistry} 로 dispatch.
- *
- * <p>PR 12-final 머지 후 이 Stub 은 통합 테스트 / 로컬 개발 용으로만 남기고 운영에선 토글 (`oauth2.client.mode=http`) 로 비활성화.
+ * <p>{@link #provider()} 의 반환값은 의미상 placeholder — 현재 Stub 은 단일 인스턴스로 모든 provider 의 path 호출을
+ * 처리한다. 다른 provider 부활 + {@code OAuth2ProviderRegistry} 도입 시점에 의미 명확해짐.
  */
 @Component
+@ConditionalOnProperty(name = "oauth2.client.mode", havingValue = "stub", matchIfMissing = true)
 public class StubOAuth2Provider implements OAuth2Provider {
 
     private static final String STUB_PREFIX = "stub:";
 
     /**
-     * Stub 은 의미상 어떤 provider 도 처리 가능 — registry 의 default fallback 으로 등록되거나
-     * 모든 provider 에 대해 같은 Stub 인스턴스를 매핑. 실 어댑터 도입 시 의미 명확해짐.
+     * Stub 은 모든 provider 를 처리 — placeholder 로 GOOGLE 반환.
      */
     @Override
     public AuthProvider provider() {
-        return AuthProvider.GOOGLE; // placeholder — PR 12-final 에서 registry 도입 후 의미 정확해짐
+        return AuthProvider.GOOGLE;
     }
 
     @Override

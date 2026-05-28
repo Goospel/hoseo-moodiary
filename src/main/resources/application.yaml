@@ -50,3 +50,16 @@ jwt:
 app:
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+
+# OAuth2 설정 (PR 12 — Google 소셜 로그인)
+# - client.mode: provider 추상화의 토글. `stub` = StubOAuth2Provider (외부 HTTP 없이 단독 테스트), `http` = HttpGoogleOAuth2Provider (실제 Google tokeninfo 호출).
+#   기본값 `stub` — 외부 키 없이 부팅됨. 운영 / 시연 환경은 OAUTH2_CLIENT_MODE=http 로 override.
+# - google.client-id: Google Cloud Console 의 OAuth 2.0 클라이언트 ID. tokeninfo 응답의 `aud` 클레임과 일치 검증 (token confused deputy 방어).
+#   기본값 `dummy` — Stub 모드에선 미사용. http 모드 부팅 시 반드시 GOOGLE_OAUTH_CLIENT_ID env var 로 override 필요.
+# - google.tokeninfo-url: Google tokeninfo endpoint. 단위 테스트 (WireMock) 에선 override 해서 localhost 로 향하게 함.
+oauth2:
+  client:
+    mode: ${OAUTH2_CLIENT_MODE:stub}
+  google:
+    client-id: ${GOOGLE_OAUTH_CLIENT_ID:dummy}
+    tokeninfo-url: ${GOOGLE_TOKENINFO_URL:https://oauth2.googleapis.com/tokeninfo}

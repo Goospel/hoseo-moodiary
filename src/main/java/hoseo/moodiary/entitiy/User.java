@@ -24,7 +24,7 @@ import java.util.UUID;
  * <p><b>인증 경로</b>는 {@link #provider} 로 구분한다:
  * <ul>
  *   <li>{@code LOCAL} — 이메일 + BCrypt 비밀번호. {@code password} 필수, {@code providerId} null.</li>
- *   <li>{@code GOOGLE} / {@code KAKAO} — OAuth2. {@code password} null, {@code providerId} = provider 측 user ID.</li>
+ *   <li>{@code GOOGLE} — OAuth2. {@code password} null, {@code providerId} = Google 의 {@code sub} 클레임.</li>
  * </ul>
  *
  * <p><b>유니크 제약</b>:
@@ -61,7 +61,7 @@ public class User extends BaseEntity {
     /**
      * BCrypt로 해시된 비밀번호.
      *
-     * <p>{@link AuthProvider#LOCAL} 회원만 값을 가진다. OAuth2 회원 ({@code GOOGLE} / {@code KAKAO}) 은 {@code null}.
+     * <p>{@link AuthProvider#LOCAL} 회원만 값을 가진다. OAuth2 회원 ({@code GOOGLE}) 은 {@code null}.
      * BCrypt 출력 길이는 60자(prefix 포함)지만 알고리즘 변경 여지를 두기 위해 100자로 잡는다.
      */
     @Column(name = "user_password", nullable = true, length = 100)
@@ -71,7 +71,7 @@ public class User extends BaseEntity {
     private String nickname;
 
     /**
-     * 인증 제공자 — LOCAL / GOOGLE / KAKAO. DB 에는 문자열 저장.
+     * 인증 제공자 — LOCAL / GOOGLE. DB 에는 문자열 저장.
      *
      * <p>{@code nullable = false} 라도 기존 LOCAL 회원의 row 가 이미 운영에 있어서 ddl-auto: update 가 ALTER 시 default 가 필요.
      * Hibernate 가 default 를 박지 않으니 — 운영 머지 전 사후 DDL 로 NOT NULL DEFAULT 'LOCAL' 적용 필요 (PR body 의 운영 머지 전 필수 체크리스트).
@@ -81,8 +81,8 @@ public class User extends BaseEntity {
     private AuthProvider provider;
 
     /**
-     * Provider 측 user ID — LOCAL 이면 {@code null}, OAuth2 이면 Google {@code sub} / Kakao {@code id}.
-     * 길이는 Google {@code sub} (~21자) / Kakao {@code id} (long 의 stringify, ~20자) 여유 두고 64자.
+     * Provider 측 user ID — LOCAL 이면 {@code null}, OAuth2 이면 Google {@code sub} 클레임.
+     * 길이는 Google {@code sub} (~21자) 여유 두고 64자 (다른 provider 부활 대비).
      */
     @Column(name = "user_provider_id", nullable = true, length = 64)
     private String providerId;
