@@ -1,27 +1,36 @@
 # GitHub Pages 자동 배포.
 #
 # 결과 URL: https://goospel.github.io/hoseo-moodiary/
-#   - /            → site/index.html (landing page)
-#   - /slides/     → presentation/moodiary-be-presentation.md 를 Marp HTML 로 변환
+#   - /          → site/index.html (landing page)
+#   - /slides/   → presentation/moodiary-be-presentation.md 를 Marp HTML 로 변환
+#   - /docs/     → docs-site/ MkDocs Material 사이트
+#                  (claude-docs/* + README.md + docs-site/docs-template/index.md 합쳐서 빌드.
+#                   PR 9 — 기존 /learning-notes/ pandoc 경로는 MkDocs 안의 /docs/learning-notes/ 로 흡수.)
 #
 # 트리거:
-#   - main push 시 site/** 또는 presentation/** 변경된 경우만
+#   - dev push 시 site/** / presentation/** / claude-docs/** / docs-site/** / README.md 변경 시
+#     (학습 노트 / 로드맵 / 트러블슈팅 등이 main 머지 전에도 사이트에 반영되도록 의도적 dev 트리거.
+#      slides 도 dev 에서 빌드 — dev 는 main 의 superset 이라 안전.)
 #   - 또는 GitHub UI 에서 수동 실행 (workflow_dispatch)
 #
 # 사전 셋업 (한 번만):
 #   Repo Settings → Pages → Source = "GitHub Actions"
+#   Environments → github-pages → Allowed branches 에 dev 추가 (T-028)
 #
 # 작동 방식:
 #   modern 방식 (gh-pages branch 안 만듦). actions/upload-pages-artifact + deploy-pages.
 
-name: Deploy GitHub Pages (landing + slides)
+name: Deploy GitHub Pages (landing + slides + docs)
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - 'site/**'
       - 'presentation/**'
+      - 'claude-docs/**'
+      - 'docs-site/**'
+      - 'README.md'
       - '.github/workflows/deploy-pages.yaml'
   workflow_dispatch:
 
@@ -37,7 +46,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build site (landing + Marp slides)
+    name: Build site (landing + Marp slides + MkDocs docs)
     runs-on: ubuntu-24.04
 
     steps:
@@ -50,6 +59,14 @@ jobs:
 
       - name: Install Marp CLI
         run: npm install -g @marp-team/marp-cli@latest
+
+      - name: Setup Python (for MkDocs)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install MkDocs Material
+        run: pip install mkdocs-material pymdown-extensions
 
       - name: Build site
         run: |
@@ -73,9 +90,41 @@ jobs:
             -o _site/slides/moodiary-be-presentation.pdf \
           || echo "::warning::PDF build failed (chromium issue?). HTML 만 deploy 됨."
 
+          # 4) MkDocs 컨텐츠 준비 — docs-site/docs/ 를 동적으로 생성:
+          #      - docs-template/index.md  → docs/index.md          (사이트 홈)
+          #      - 저장소 루트 README.md   → docs/project-readme.md  (T-029: MkDocs 는 README.md 를 index.md 로 자동 변환하니까 충돌 회피용 다른 이름)
+          #      - claude-docs/*           → docs/ 안으로 통째 복사 (plan / learning-notes / troubleshooting / api-contracts / security / ops-runbooks/*)
+          #    (이렇게 분리한 이유 — claude-docs/ 는 Claude 가 보는 작업 가이드 정신을 유지하고,
+          #     MkDocs 는 빌드 시점에만 그걸 *읽기 좋은 사이트* 로 한 번 더 가공한다.)
+          mkdir -p docs-site/docs
+          cp docs-site/docs-template/index.md docs-site/docs/index.md
+          cp README.md docs-site/docs/project-readme.md
+          cp -r claude-docs/* docs-site/docs/
+
+          # 4a) 원본 markdown 안의 ../README.md 같은 상대 링크 → MkDocs 안의 project-readme.md 로 치환.
+          #     (원본 claude-docs/learning-notes.md 등은 그대로 ../README.md 를 가리킨다 — 그건 GitHub UI 에서 자연스러움.
+          #      여기서는 빌드 시점의 docs-site/docs/ 안 사본에만 sed 를 적용해서 MkDocs 가 인식하는 경로로 변환.)
+          find docs-site/docs -name '*.md' -print0 | xargs -0 sed -i \
+            -e 's|\.\./README\.md|project-readme.md|g' \
+            -e 's|(README\.md)|(project-readme.md)|g'
+
+          # 4b) T-030: project-readme.md (저장소 루트 README) 안의 상대 링크들 외부화.
+          #     저장소 README 는 GitHub UI 친화 경로로 './claude-docs/X.md', './CLAUDE.md', './compose.yaml' 같이 디렉토리 구조 그대로 박는다.
+          #     하지만 MkDocs 빌드 사본은 docs/ 안으로 평면화되어 './claude-docs/X.md' 가 깨짐.
+          #     해결: README 안의 모든 './X' 상대 링크를 GitHub blob URL 로 외부화 — 사이트 검색은 nav 로 들어가고,
+          #     README 의 진입 링크들은 원본 GitHub 파일을 새 탭에서 열어주는 의도.
+          sed -i -E 's|\]\(\./([^)]+)\)|](https://github.com/Goospel/hoseo-moodiary/blob/dev/\1)|g' \
+            docs-site/docs/project-readme.md
+
+          # 5) MkDocs build → _site/docs/
+          cd docs-site
+          mkdocs build --site-dir ../_site/docs --strict
+          cd ..
+
           echo "::group::Built site tree"
-          ls -la _site/
-          ls -la _site/slides/
+          find _site -maxdepth 3 -type d
+          echo "---files---"
+          find _site -maxdepth 3 -type f | head -60
           echo "::endgroup::"
 
       - name: Upload artifact

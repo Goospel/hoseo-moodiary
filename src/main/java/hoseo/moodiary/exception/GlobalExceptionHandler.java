@@ -37,6 +37,19 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponseDto.builder().message(e.getMessage()).build());
     }
 
+    @ExceptionHandler(OAuth2VerificationException.class)
+    public ResponseEntity<ErrorResponseDto> handleOAuth2Verification(OAuth2VerificationException e) {
+        // 사유 노출 최소 — provider 내부 구조 / 토큰 형식 단서를 응답에 박지 않는다.
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ErrorResponseDto.builder().message("OAuth2 인증 실패").build());
+    }
+
+    @ExceptionHandler(EmailAlreadyExistsForOtherProviderException.class)
+    public ResponseEntity<ErrorResponseDto> handleEmailDifferentProvider(EmailAlreadyExistsForOtherProviderException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponseDto.builder().message(e.getMessage()).build());
+    }
+
     @ExceptionHandler(PostAccessDeniedException.class)
     public ResponseEntity<ErrorResponseDto> handlePostAccessDenied(PostAccessDeniedException e) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN)

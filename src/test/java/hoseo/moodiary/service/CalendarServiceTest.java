@@ -179,7 +179,7 @@ class CalendarServiceTest {
     // --- helpers ---
 
     private static Post postWithCreatedAt(UUID postId, LocalDateTime createdAt) {
-        User user = User.builder().email("a@b.com").password("HASHED").nickname("n").build();
+        User user = User.createLocal("a@b.com", "HASHED", "n");
         setField(user, "id", USER_ID);
         Post post = Post.builder().title("t").content("c").user(user).build();
         setField(post, "id", postId);

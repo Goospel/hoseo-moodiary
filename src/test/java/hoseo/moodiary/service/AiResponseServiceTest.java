@@ -54,7 +54,7 @@ class AiResponseServiceTest {
     private static final UUID OTHER_USER_ID = UUID.fromString("00000000-0000-0000-0000-000000000002");
 
     private static User userWithId(UUID id) {
-        User user = User.builder().email("a@b.com").password("HASHED").nickname("nick").build();
+        User user = User.createLocal("a@b.com", "HASHED", "nick");
         setField(user, "id", id);
         return user;
     }
