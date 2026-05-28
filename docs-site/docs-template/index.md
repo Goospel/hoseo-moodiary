@@ -14,7 +14,7 @@
 | **막혔던 곳 + 해결** | [트러블슈팅 (T-001 ~ T-028)](troubleshooting.md) |
 | **모르고 물어봐서 배운 것들** | [학습 노트 (12 항목)](learning-notes.md) |
 | **EC2 / FE S3 운영 가이드** | [운영 Runbook](ops-runbooks/ec2-cheatsheet.md) |
-| **프로젝트 한눈에** | [README](README.md) |
+| **프로젝트 한눈에** | [README](project-readme.md) |
 
 ## 🔗 외부 사이트
 

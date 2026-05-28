@@ -92,14 +92,21 @@ jobs:
 
           # 4) MkDocs 컨텐츠 준비 — docs-site/docs/ 를 동적으로 생성:
           #      - docs-template/index.md  → docs/index.md          (사이트 홈)
-          #      - 저장소 루트 README.md   → docs/README.md         (프로젝트 한눈)
+          #      - 저장소 루트 README.md   → docs/project-readme.md  (T-029: MkDocs 는 README.md 를 index.md 로 자동 변환하니까 충돌 회피용 다른 이름)
           #      - claude-docs/*           → docs/ 안으로 통째 복사 (plan / learning-notes / troubleshooting / api-contracts / security / ops-runbooks/*)
           #    (이렇게 분리한 이유 — claude-docs/ 는 Claude 가 보는 작업 가이드 정신을 유지하고,
           #     MkDocs 는 빌드 시점에만 그걸 *읽기 좋은 사이트* 로 한 번 더 가공한다.)
           mkdir -p docs-site/docs
           cp docs-site/docs-template/index.md docs-site/docs/index.md
-          cp README.md docs-site/docs/README.md
+          cp README.md docs-site/docs/project-readme.md
           cp -r claude-docs/* docs-site/docs/
+
+          # 4a) 원본 markdown 안의 ../README.md 같은 상대 링크 → MkDocs 안의 project-readme.md 로 치환.
+          #     (원본 claude-docs/learning-notes.md 등은 그대로 ../README.md 를 가리킨다 — 그건 GitHub UI 에서 자연스러움.
+          #      여기서는 빌드 시점의 docs-site/docs/ 안 사본에만 sed 를 적용해서 MkDocs 가 인식하는 경로로 변환.)
+          find docs-site/docs -name '*.md' -print0 | xargs -0 sed -i \
+            -e 's|\.\./README\.md|project-readme.md|g' \
+            -e 's|(README\.md)|(project-readme.md)|g'
 
           # 5) MkDocs build → _site/docs/
           cd docs-site
