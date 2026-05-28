@@ -21,6 +21,9 @@
 7. [AWS SSM 자동화 — CD 성공 후 EC2 에서 수동 docker pull 필요한가?](#7-aws-ssm-자동화--cd-성공-후-ec2-에서-수동-docker-pull-필요한가)
 8. [`ddl-auto: update` 의 한계 — 운영 머지 후 UNIQUE 인덱스 사후 검증이 필요한 이유](#8-ddl-auto-update-의-한계--운영-머지-후-unique-인덱스-사후-검증이-필요한-이유)
 9. [`utf8mb4` 가 왜 중요한가 — 이모지 INSERT 폭발 시나리오](#9-utf8mb4-가-왜-중요한가--이모지-insert-폭발-시나리오)
+10. [Spring 비동기 (`@EnableAsync` + `@Async`) — 동기 블로킹 회피 + DB 상태머신 + race 방지](#10-spring-비동기-enableasync--async--동기-블로킹-회피--db-상태머신--race-방지)
+11. [AWS SSM Run Command — outbound polling 구조 + IAM role / 0 인바운드 / send-command 한계](#11-aws-ssm-run-command--outbound-polling-구조--iam-role--0-인바운드--send-command-한계)
+12. [CORS — Same-Origin Policy + 브라우저 차단 메커니즘 + Preflight + allowlist vs 와일드카드](#12-cors--same-origin-policy--브라우저-차단-메커니즘--preflight--allowlist-vs-와일드카드)
 
 ---
 
@@ -452,6 +455,643 @@ ALTER TABLE ai_response CONVERT TO CHARACTER SET utf8mb4;
 
 ---
 
+## 10. Spring 비동기 (`@EnableAsync` + `@Async`) — 동기 블로킹 회피 + DB 상태머신 + race 방지
+
+### 한 줄 요약
+> `@EnableAsync` 는 스위치, `@Async` 는 표시 — 그 메서드는 별도 스레드 풀에서 실행되어 호출자를 블로킹하지 않는다. AI 서버 호출이 5~30초 걸리는데 사용자가 그동안 기다릴 수 없으니, 일기 저장만 즉시 끝내고 AI 호출은 백그라운드 + DB 의 `PENDING / DONE / FAILED` 상태로 결과 전달 + 클라이언트가 폴링으로 받기 — 큐 없는 단순 구조.
+
+### 동기 vs 비동기 — 개념
+
+| 모드 | 흐름 |
+|---|---|
+| **동기 (Synchronous)** | 호출자 → 함수 실행 끝까지 **블로킹** → 결과 받음 → 다음 줄 진행 |
+| **비동기 (Asynchronous)** | 호출자 → 함수 실행 **요청만 던지고 즉시 리턴** → 다음 줄 진행. 결과는 별도 채널로 받음 |
+
+음식점 비유:
+- **동기** — 카운터에서 주문하고 음식 나올 때까지 카운터 앞에서 기다림. 그동안 다른 손님 못 받음.
+- **비동기** — 주문 번호 받고 자리로 감. 음식 준비되면 진동벨이 울림. 그 사이 카운터는 다음 손님 받음.
+
+→ **핵심 차이**: 비동기는 호출자의 시간을 점유하지 않는다.
+
+### Moodiary 가 비동기를 필요로 한 이유
+
+동기로 구현했을 때의 문제:
+
+```
+POST /post (일기 작성)
+  ├─ 일기 DB 저장 (50ms)
+  ├─ AI 서버 호출 — 응답 생성 + 이모지 분석 (5초 ~ 30초)  ★ 병목
+  └─ 클라이언트에 201 응답
+```
+
+- 사용자가 5~30초 기다림 — UX 최악
+- HTTP timeout 위험 (nginx / ALB / 클라이언트 측 30~60s 초과 가능)
+- Tomcat worker thread 가 30초 동안 한 요청에 묶임 → 동시 처리량 ↓
+- AI 서버가 죽으면 일기 작성 자체가 실패 — 결합도 ↑
+
+비동기로 바꾼 후:
+
+```
+POST /post (일기 작성)
+  ├─ 일기 DB 저장 (50ms)
+  ├─ AiResponse(status=PENDING) row 같은 트랜잭션에 저장 (10ms)
+  ├─ aiResponseService.triggerAsync(postId)   ← 비동기 — 즉시 리턴
+  └─ 클라이언트에 201 응답 (총 60ms)
+
+[별도 스레드 (백그라운드)]
+  ├─ AI 서버 호출 (5~30초)
+  ├─ 결과를 DB 의 PENDING row 에 UPDATE (DONE 또는 FAILED)
+
+[클라이언트]
+  GET /post/{id}/ai-response   ← 폴링 (1초마다 호출)
+  └─ status 가 PENDING → DONE 으로 바뀐 순간 결과 표시
+```
+
+### `@EnableAsync` + `@Async` — Spring 이 실제로 하는 일
+
+`AsyncConfig.java`:
+
+```java
+@Configuration
+@EnableAsync
+public class AsyncConfig {
+}
+```
+
+`@EnableAsync` 는 **Spring 에게 "이 애플리케이션에서 `@Async` 어노테이션을 인식해라"** 라고 켜는 스위치. 이게 없으면 `@Async` 가 붙어 있어도 무시되고 그냥 동기로 실행된다.
+
+내부적으로 Spring 이 하는 일:
+1. 시작 시 `@Async` 가 붙은 메서드를 가진 빈을 스캔
+2. 그 빈을 **AOP 프록시 (proxy)** 로 감싼다
+3. 프록시는 메서드 호출을 가로채서 **별도 스레드 풀에 실행을 위임**하고 즉시 리턴
+
+`AiResponseService.java`:
+
+```java
+@Async
+public void triggerAsync(UUID postId) {
+    AiResponse aiResponse = aiResponseRepository.findByPost_Id(postId)...;
+    try {
+        AiInferenceResult result = client.invoke(...);
+        aiResponse.markDone(result.content(), result.emoji());
+    } catch (AiInferenceException e) {
+        aiResponse.markFailed(e.getMessage());
+    }
+}
+```
+
+`PostController` 가 이 메서드를 호출하면:
+- **컨트롤러 스레드**: 메서드 호출만 던지고 즉시 다음 줄로 진행 → 201 응답
+- **별도 스레드**: 위 메서드 본문을 실행 (5~30초)
+
+### `@Async void` vs `CompletableFuture<T>`
+
+| 리턴 타입 | 의미 |
+|---|---|
+| `void` | Fire-and-forget. 호출자가 결과 / 예외 받을 방법 없음 |
+| `CompletableFuture<T>` | 나중에 `.get()` 으로 결과 / 예외 받기 가능 |
+
+Moodiary 는 `void` — 호출자 (컨트롤러) 는 결과를 신경 쓸 필요 없고, 결과는 DB row 의 `status` 로만 표현된다.
+
+### `ThreadPoolTaskExecutor` — 스레드 풀
+
+`@Async` 가 호출될 때마다 새 스레드를 만들면 비용 + 메모리 폭발 → **풀에서 재사용**. `ThreadPoolTaskExecutor` 가 Spring 의 기본 도구.
+
+**현재 코드에는 명시 안 됨** — PR 4-pre 단계는 Spring 기본 executor 에 맡김. `AsyncConfig.java` 의 주석:
+
+> PR 4-pre 단계에선 executor 빈을 별도 정의하지 않고 Spring 기본값에 맡긴다 — 졸업 데모 트래픽 기준 충분. 실 운영 부하 측정 후 (PR 4-final 머지 이후) `ThreadPoolTaskExecutor` 외부화 검토.
+
+명시할 때의 모양:
+
+```java
+@Bean(name = "aiExecutor")
+public ThreadPoolTaskExecutor aiExecutor() {
+    ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+    executor.setCorePoolSize(5);        // 항상 살아있는 스레드 5개
+    executor.setMaxPoolSize(20);        // 부하 시 최대 20개
+    executor.setQueueCapacity(100);     // 대기 큐 100개
+    executor.setThreadNamePrefix("ai-");
+    executor.initialize();
+    return executor;
+}
+```
+
+그 후 `@Async("aiExecutor")` 로 명시적 풀 지정 → 도메인별 풀 분리로 AI 호출 폭주가 다른 비동기 작업에 영향 X.
+
+### 큐 / 메시지브로커를 안 쓴 이유 — DB 상태 머신으로 단순화
+
+보통 큰 규모는 `Kafka / RabbitMQ / SQS` 를 도입하지만, 졸업 프로젝트 범위에서는 인프라 부담이 큼.
+
+`AiResponseStatus.java`:
+
+```java
+public enum AiResponseStatus {
+    PENDING,  // 일기 저장 직후 — AI 처리 중
+    DONE,     // 성공
+    FAILED    // 실패
+}
+```
+
+→ **DB row 의 `status` 컬럼이 큐 역할**. 단순한 상태 머신.
+
+Trade-off:
+
+| 항목 | 큐 방식 | DB 상태 머신 |
+|---|---|---|
+| 인프라 | Kafka + Worker | DB 만 |
+| 재시도 | 큐 자체 기능 | 수동 구현 필요 |
+| 확장성 | Worker 수평 확장 무한 | 동일 인스턴스 내 스레드 풀 |
+| 적합 규모 | 대형 서비스 | **졸업 프로젝트 / 소규모** |
+
+### Race Condition 방지 — commit 후 trigger
+
+**잘못된 예** (트랜잭션 안에서 호출):
+
+```java
+@Transactional
+public UUID create(...) {
+    Post post = postRepository.save(...);
+    aiResponseRepository.save(new AiResponse(PENDING));
+    aiResponseService.triggerAsync(post.getId());  // ★ 트랜잭션 안에서 호출
+    return post.getId();
+}
+```
+
+위 코드는 다음 race 를 만든다:
+1. 트랜잭션이 PENDING row 를 **메모리에는 만들었지만 DB commit 전**
+2. `triggerAsync` 가 별도 트랜잭션에서 즉시 시작
+3. 별도 트랜잭션이 PENDING row 를 SELECT — **아직 commit 안 됨 → 안 보임**
+4. `AiResponseNotFoundException` 발생
+
+**Moodiary 의 해결** — 컨트롤러에서 호출 (`PostController.java`):
+
+```java
+@PostMapping("/post")
+public ResponseEntity<UUID> post(...) {
+    UUID postId = service.create(userId, requestDto);
+    // create() 의 @Transactional 가 메서드 return 시점에 commit. 이 줄에서 호출하면 새 Async
+    // 트랜잭션이 PENDING row 를 안전하게 select 가능 (race 없음).
+    aiResponseService.triggerAsync(postId);
+    return ResponseEntity.status(HttpStatus.CREATED).body(postId);
+}
+```
+
+`service.create()` 가 리턴할 때 트랜잭션이 commit 된다. 그 다음 줄에서 `triggerAsync` 호출 → 비동기 스레드가 select 할 때 PENDING row 가 이미 DB 에 있음.
+
+→ PR 4-pre 의 **가장 중요한 설계 결정 중 하나**. 슬라이드 14번 ("비동기 AI 응답 흐름") 의 "race free" 표시가 이것.
+
+### 발표 시 한 줄
+> "AI 서버 호출이 5~30초 걸려서 동기로 두면 사용자가 그만큼 대기합니다. `@EnableAsync` + `@Async` 로 별도 스레드 풀에 떠넘기고, DB 의 PENDING/DONE/FAILED 상태로 결과를 전달합니다. 컨트롤러에서 호출하는 이유는 트랜잭션 commit 후 비동기 스레드가 PENDING row 를 안전하게 select 하도록 race 를 막기 위해서입니다."
+
+### 청중 Q&A 대비
+
+**Q. 왜 Kafka 같은 큐를 안 썼나요?**
+> 졸업 프로젝트 규모에서는 큐 인프라가 오버 엔지니어링. AI 호출 동시성이 낮고 (사용자가 일기 한 개 쓰면 한 번 호출), 워커 수평 확장도 불필요. DB row 의 status 컬럼이 큐 역할로 충분. 트래픽이 늘면 그때 도입 검토.
+
+**Q. AI 호출이 실패하면 어떻게 되나요?**
+> `AiInferenceException` 을 catch 해서 `markFailed(errorMessage)` 호출 → DB row 의 status 가 FAILED 로 전이. 사용자가 폴링으로 받는 응답은 status=FAILED + errorMessage. 일기 자체는 이미 저장돼 있어서 잃지 않음.
+
+**Q. ThreadPool 이 가득 차면?**
+> 현재는 Spring 기본 executor 라 사실상 무제한 (실은 4.x 의 새 기본값에 따라 다름). `ThreadPoolTaskExecutor` 명시 후에는 queueCapacity 까지 차면 RejectedExecutionException → 트리거 자체가 실패. 사용자는 일기는 저장됐는데 AI 응답이 영원히 PENDING 으로 남는 상황. 이건 PR 4-final 부하 측정 후 정책 결정 예정.
+
+**Q. `@Async` 가 같은 클래스 내부 호출에서는 안 먹는다고 들었는데?**
+> 맞음. Spring AOP 프록시는 외부에서 빈 메서드를 호출할 때만 가로채는 구조. 같은 클래스 안에서 `this.triggerAsync()` 로 호출하면 프록시를 거치지 않아서 동기 실행됨. Moodiary 는 `PostController` 가 `aiResponseService.triggerAsync()` 로 **다른 빈을 통해** 호출하니 안전.
+
+### 코드 위치
+- `src/main/java/hoseo/moodiary/config/AsyncConfig.java` — `@EnableAsync` 스위치
+- `src/main/java/hoseo/moodiary/service/AiResponseService.java` — `@Async public void triggerAsync(UUID postId)`
+- `src/main/java/hoseo/moodiary/controller/PostController.java` — commit 후 trigger 호출
+- `src/main/java/hoseo/moodiary/entitiy/AiResponseStatus.java` — `PENDING / DONE / FAILED` enum
+
+### 관련 노트
+- [6번. dev/main 분리](#6-dev-와-main-의-의미--왜-dev-머지로는-운영-반영-안-되나) — PR 4-pre 는 dev → main release PR (#62) 후에야 운영 EC2 에 비동기 골격이 반영됨
+- [8번. ddl-auto 의 한계](#8-ddl-auto-update-의-한계--운영-머지-후-unique-인덱스-사후-검증이-필요한-이유) — `ai_response` 테이블의 `uk_ai_response_post_id` 가 비동기 1:1 정합성을 보장하는 핵심 제약
+
+---
+
+## 11. AWS SSM Run Command — outbound polling 구조 + IAM role / 0 인바운드 / send-command 한계
+
+### 한 줄 요약
+> **AWS SSM Run Command** 는 EC2 에 미리 깔린 `amazon-ssm-agent` 가 outbound polling 으로 AWS 큐에서 명령을 받아 root 권한으로 실행하는 구조 — SSH 키 없이 IAM role 만으로 원격 명령 가능, 포트 22 닫고도 됨. `send-command` 는 enqueue 만 보장 (silent fail 가능) — `wait command-executed` + health check 가 있어야 CD 초록불이 진짜 deploy 성공을 의미한다.
+
+### AWS SSM 이 무엇인가
+
+**Systems Manager** — AWS 가 제공하는 **인스턴스 운영 통합 도구 모음**. 한 서비스가 아니라 여러 하위 기능의 묶음:
+
+| 하위 기능 | 역할 |
+|---|---|
+| **Run Command** (`send-command`) ← Moodiary 가 쓰는 것 | EC2 에 임의 shell 명령 원격 실행 |
+| **Session Manager** | SSH 대체 — 브라우저 / CLI 로 EC2 shell 접속 (포트 22 안 열고) |
+| **Parameter Store** | 시크릿 / 설정값 중앙 저장 (RDS 비번 등) |
+| **Patch Manager** | OS 패치 자동 |
+| **State Manager** | EC2 의 desired state 유지 (config drift 방지) |
+| **Inventory** | 모든 인스턴스의 설치 SW 목록 자동 수집 |
+
+→ Moodiary 가 직접 쓰는 건 **Run Command** 뿐. 나머지는 졸업 프로젝트 범위 초과.
+
+### SSH 가 아니라 SSM 을 선택한 이유
+
+| 비교 항목 | SSH 방식 | SSM Run Command |
+|---|---|---|
+| **인증 키** | private key 파일 관리 필요 | IAM role 만 (키 X) |
+| **포트** | 22 인바운드 오픈 필요 | **0 인바운드** (agent 가 outbound) |
+| **감사 로그** | 직접 구성 (auditd 등) | CloudTrail 에 자동 |
+| **GitHub Actions 연동** | SSH key 를 GitHub Secrets 에 박아야 함 | OIDC + IAM role 만 |
+| **키 회전 / 유출 대응** | 키 새로 생성 + 모든 인스턴스 재배포 | IAM policy 한 줄 변경 |
+| **포트 22 공격면** | 24/7 노출 | **0** |
+
+졸업 프로젝트에서 결정적인 한 가지:
+> **GitHub Actions 가 EC2 에 들어가야 하는데, SSH key 를 GitHub Secrets 에 저장하기 싫었다.** 키가 새면 모든 EC2 의 authorized_keys 를 손봐야 함. SSM 은 IAM role 한 줄로 통제 가능.
+
+### SSM Run Command — 내부 작동 원리
+
+핵심: **SSM Agent** 가 사전에 설치되어 있어야 한다.
+
+```
+┌─────────────────────┐                  ┌──────────────────────────────┐
+│ GitHub Actions      │                  │  EC2 instance                │
+│ (CD workflow)       │                  │  ┌────────────────────────┐  │
+│                     │                  │  │ amazon-ssm-agent       │  │
+│ aws ssm             │                  │  │ (백그라운드 데몬)        │  │
+│   send-command ──────► AWS SSM Service │  │                        │  │
+│   --instance-ids    │  (Region 내부)   │  │ outbound polling       │  │
+│   --document-name   │       │          │  │ (HTTPS, 443) ──────────┼──┘
+│   AWS-RunShellScript│       └──────────► (큐에서 명령 받음)        │
+│                     │                  │  │                        │  │
+│ aws ssm             │                  │  │ shell 실행             │  │
+│   wait              │                  │  │ (root 권한)            │  │
+│   command-executed ◄─────── 결과 응답  │  │                        │  │
+└─────────────────────┘                  │  └────────────────────────┘  │
+                                         └──────────────────────────────┘
+```
+
+흐름 단계별:
+1. **GitHub Actions** 가 `aws ssm send-command` 호출 — 인자: instance ID, document name (`AWS-RunShellScript`), 실행할 shell 명령
+2. **AWS SSM 서비스** 가 명령을 큐에 박아둠
+3. **EC2 의 ssm-agent** 가 **outbound polling** 으로 (인바운드 X) 큐를 주기적 확인
+4. agent 가 명령을 가져와서 **root 권한**으로 shell 실행
+5. 결과 (stdout / stderr / exit code) 를 SSM 서비스에 응답
+6. GitHub Actions 의 `aws ssm wait command-executed` 가 그 응답을 받음
+
+**핵심 포인트 — Outbound Polling**: EC2 입장에서는 **22번 포트가 닫혀 있어도 됨**. agent 가 HTTPS (443) 로 AWS endpoint 에 polling 만 함. 그래서 보안 그룹 인바운드를 완전히 봉쇄 가능.
+
+### Moodiary 의 실제 CD 명령
+
+`.github/workflows/moodiary-be-cd.yaml` 의 핵심:
+
+```yaml
+- name: Deploy via SSM
+  run: |
+    COMMAND_ID=$(aws ssm send-command \
+      --region ap-northeast-2 \
+      --instance-ids "${{ secrets.AWS_EC2_INSTANCE_ID }}" \
+      --document-name "AWS-RunShellScript" \
+      --parameters 'commands=[
+        "cd /home/ec2-user/moodiary",
+        "docker-compose pull",
+        "docker-compose up -d"
+      ]' \
+      --query "Command.CommandId" \
+      --output text)
+
+    aws ssm wait command-executed \
+      --command-id "$COMMAND_ID" \
+      --instance-id "${{ secrets.AWS_EC2_INSTANCE_ID }}"
+```
+
+### IAM Role 두 갈래
+
+#### GitHub Actions → AWS
+
+GitHub Actions 는 OIDC 로 AWS 에 자격증명을 받고, 그 role 이 다음 policy 를 가짐:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "ssm:SendCommand",
+    "ssm:GetCommandInvocation"
+  ],
+  "Resource": [
+    "arn:aws:ec2:ap-northeast-2:*:instance/i-xxxxx",
+    "arn:aws:ssm:ap-northeast-2::document/AWS-RunShellScript"
+  ]
+}
+```
+
+→ "이 한 EC2 인스턴스에만, 이 한 문서로만, send-command 가능". 최소 권한.
+
+#### EC2 → AWS SSM
+
+EC2 의 IAM instance profile 에 `AmazonSSMManagedInstanceCore` policy 부착되어야 agent 가 polling 가능. 이게 없으면 ssm-agent 는 떠 있어도 명령을 못 받음 — Moodiary 셋업 초기에 한 번 빼먹어서 헤맸음.
+
+### `wait command-executed` — Silent Fail 의 진실 ([T-019](./troubleshooting.md) / T-023)
+
+`send-command` 는 **명령을 큐에 enqueue 한 순간 성공 반환**한다. 즉, agent 가 실제로 받아서 실행했는지는 **모름**. 이게 silent fail 의 원인이었다:
+
+```
+옛 워크플로우 (PR #45 이전):
+  aws ssm send-command ...    ← enqueue 성공 → exit 0
+                                  ✅ GitHub Actions 초록불
+
+  실제 EC2:
+    - agent 가 죽어 있으면 → 명령 영원히 안 받음
+    - docker-compose plugin 없음 → 실행 실패
+    - 둘 다 GitHub Actions 가 모름
+
+  결과: CD 초록불 = 가짜. 운영 image 갱신은 사람이 수동 SSH 로
+        (Claude 가 발견 전까지 수개월간 가짜 초록 체크)
+```
+
+PR #45 이후의 안전망:
+```bash
+COMMAND_ID=$(aws ssm send-command ... --query "Command.CommandId" --output text)
+
+aws ssm wait command-executed --command-id "$COMMAND_ID" --instance-id "..."
+   # ↑ 명령이 Success / Failed 상태가 될 때까지 대기 → Failed 면 non-zero exit
+
+curl -fsS http://EC2_IP:8080/v3/api-docs --max-time 30
+   # ↑ swagger 가 200 응답할 때까지 polling
+```
+
+→ **CD 초록불 = 진짜 deploy 성공** 으로 의미 회복.
+
+### SSM 의 다른 면 — 안 쓰지만 알아두기
+
+#### Parameter Store — 시크릿 중앙 저장
+
+현재 Moodiary 는 시크릿을 **GitHub Secrets + EC2 `.env` 이중 관리**. 단점:
+- 둘이 어긋날 위험
+- EC2 새로 만들 때마다 `.env` 수동 배포
+
+Parameter Store 면:
+```bash
+aws ssm get-parameter --name /moodiary/prod/JWT_SECRET --with-decryption
+```
+- 모든 인스턴스가 같은 시크릿 자동 동기화
+- IAM 으로 접근 제어
+- 변경 history 자동
+
+→ 졸업 발표 이후 PR 7 (ECS) 와 같이 도입 검토.
+
+#### Session Manager — SSH 대체
+
+현재 Moodiary 는 디버깅 시 SSH 로 EC2 에 들어감 (포트 22 오픈 필요).
+
+Session Manager 면:
+```bash
+aws ssm start-session --target i-xxxxx
+```
+- 브라우저 / AWS CLI 에서 직접 shell 접속
+- 포트 22 완전 봉쇄 가능
+- 모든 세션 CloudTrail 에 자동 로그
+- IAM 으로 누가 언제 들어왔는지 통제
+
+→ 보안 향상의 자연스러운 다음 단계.
+
+### 발표 시 한 줄
+> "SSH 키를 GitHub Secrets 에 두는 게 부담스러워서 SSM Run Command 를 선택했습니다. EC2 의 ssm-agent 가 outbound polling 으로 AWS 큐에서 명령을 받는 구조라 포트 22 를 닫고도 자동 배포가 됩니다. 다만 send-command 자체는 enqueue 만 보장해서 wait + health check 가 없으면 silent fail 이 일어납니다 — 그게 T-019 의 한 층이었습니다."
+
+### 청중 Q&A 대비
+
+**Q. SSH 보다 느리지 않나요?**
+> Polling 주기와 큐 처리 때문에 명령 시작까지 보통 1~3초 지연. 자동 배포 시나리오에서는 문제 없음. 인터랙티브 디버깅에는 Session Manager 가 더 적합.
+
+**Q. ssm-agent 가 죽으면?**
+> agent 가 죽으면 명령이 계속 큐에 쌓이다가 timeout. `wait command-executed` 가 fail 응답을 주니 CD 가 빨간불로 알림. 복구는 EC2 SSH (또는 콘솔의 EC2 Instance Connect) 로 들어가서 `sudo systemctl restart amazon-ssm-agent`.
+
+**Q. send-command 와 send-shell-command 같은 다른 게 있나요?**
+> `send-command` 가 통합 API 이고, 실행 방식은 **SSM Document** 로 결정됨. `AWS-RunShellScript` (Linux shell), `AWS-RunPowerShellScript` (Windows), `AWS-RunRemoteScript` (S3 의 스크립트) 등. 즉 같은 API 로 OS 무관 명령 가능.
+
+**Q. 명령 결과 stdout 은 어디서 보나요?**
+> `aws ssm get-command-invocation --command-id ... --instance-id ...` 로 stdout / stderr 조회. CloudWatch Logs 로 자동 스트리밍하는 옵션도 있음 (Moodiary 는 사용 안 함).
+
+### 코드 위치
+- `.github/workflows/moodiary-be-cd.yaml` — `send-command` + `wait command-executed` + health check 전체
+- EC2 IAM instance profile — `AmazonSSMManagedInstanceCore` policy
+- GitHub Actions OIDC role — `ssm:SendCommand` + `ssm:GetCommandInvocation` 최소 권한
+- [`troubleshooting.md` T-019 / T-023](./troubleshooting.md) — silent fail 의 역사와 안전망 추가 경위
+
+### 관련 노트
+- [6번. dev/main 분리](#6-dev-와-main-의-의미--왜-dev-머지로는-운영-반영-안-되나) — main 머지가 SSM 트리거
+- [7번. SSM 자동화 범위](#7-aws-ssm-자동화--cd-성공-후-ec2-에서-수동-docker-pull-필요한가) — "수동 docker pull 필요한가" 의 답 (현재 항목이 그 메커니즘 자체)
+- [10번. Spring 비동기](#10-spring-비동기-enableasync--async--동기-블로킹-회피--db-상태머신--race-방지) — 같은 "큐 + polling" 패턴이 도메인 비동기에도 적용됨 (이쪽은 DB 가 큐, 거기는 AWS SSM 이 큐)
+
+---
+
+## 12. CORS — Same-Origin Policy + 브라우저 차단 메커니즘 + Preflight + allowlist vs 와일드카드
+
+### 한 줄 요약
+> **CORS** 는 브라우저의 Same-Origin Policy (다른 origin 응답 읽기 차단) 의 예외를 **서버 응답 헤더로 명시적 허용** 하는 메커니즘. 인증 / JSON body 같은 비단순 요청은 본 요청 전에 **OPTIONS preflight** 로 사전 확인. 와일드카드 `*` 은 `credentials=true` 와 충돌하므로 정확한 origin allowlist 가 안전한 정책.
+
+### Same-Origin Policy (SOP) — CORS 의 전제
+
+브라우저의 가장 오래된 보안 규칙:
+> JavaScript 가 **다른 origin 의 응답을 읽을 수 없게 차단**한다.
+
+**Origin** = Protocol + Host + Port 세 요소가 모두 같아야 "same origin":
+
+| URL A | URL B | Same Origin? |
+|---|---|---|
+| `https://example.com/page` | `https://example.com/api` | ✅ |
+| `https://example.com` | `http://example.com` | ❌ (protocol 다름) |
+| `https://example.com` | `https://api.example.com` | ❌ (host 다름) |
+| `https://example.com:443` | `https://example.com:8080` | ❌ (port 다름) |
+
+### SOP 가 왜 필요한가 — 악성 시나리오
+
+SOP 가 없다면:
+```
+사용자가 은행 사이트 (bank.com) 로그인 중 — 쿠키 살아있음
+   │
+   ↓
+같은 탭으로 evil.com 방문
+   │
+   ↓
+evil.com 의 JavaScript:
+   fetch('https://bank.com/api/transfer?to=hacker&amount=1000000')
+   ↑ 브라우저가 자동으로 bank.com 쿠키 첨부
+   ↑ 은행 서버는 "로그인된 사용자의 정상 요청" 으로 인식
+   ↑ 돈 이체 성공
+```
+
+→ SOP 가 이걸 기본적으로 차단. evil.com 의 JS 는 bank.com 의 응답을 읽을 수 없음.
+
+### 그런데 — 정당한 cross-origin 도 많다
+
+Moodiary 의 실제 상황:
+```
+Frontend:  http://moodiary-frontend.s3-website.ap-northeast-2.amazonaws.com   (S3, 도쿄)
+Backend:   http://15.165.95.129:8080                                          (EC2, 서울)
+                                ↑ Origin 완전히 다름
+```
+
+FE 의 React 가 BE 의 API 를 호출해야 하는데 SOP 가 차단. 그래서 필요한 게 **CORS**.
+
+### CORS — 서버가 "이 origin 은 OK" 라고 선언
+
+CORS 는 HTTP 응답 헤더로 동작. 서버가 응답에 특정 헤더를 박으면, 브라우저가 "OK, 이 origin 에서 온 요청은 허용".
+
+**단순 요청 (Simple Request) 의 흐름**:
+```
+[브라우저 in S3 (FE)]                        [서버 EC2 (BE)]
+
+GET /post
+Origin: http://moodiary-frontend.s3-website...
+                                  ─────────►  처리 후 응답
+
+                                  ◄─────────  200 OK
+                                              Access-Control-Allow-Origin: http://moodiary-frontend.s3-website...
+                                              [body]
+
+브라우저: 응답 헤더의 ACAO 가 내 origin 과
+일치 → JS 에 응답 전달 ✅
+```
+
+핵심 헤더:
+- **요청 헤더 `Origin`** — 브라우저가 자동으로 박음. JS 가 조작 불가능.
+- **응답 헤더 `Access-Control-Allow-Origin` (ACAO)** — 서버가 박음. 브라우저가 이걸 확인.
+
+**단순 요청의 조건** — 다 충족해야 simple:
+- Method: `GET` / `POST` / `HEAD` 중 하나
+- Content-Type: `text/plain` / `application/x-www-form-urlencoded` / `multipart/form-data` 중 하나
+- 커스텀 헤더 없음 (`Authorization` 도 없음)
+
+→ **Moodiary 의 모든 API 호출은 `Authorization: Bearer ...` 헤더가 있어서 simple 이 아님** → preflight 필요.
+
+### Preflight Request (`OPTIONS`)
+
+JWT 인증, JSON body 같은 게 들어가면 브라우저가 본 요청 전에 사전 확인:
+
+```
+[브라우저]                                    [서버]
+
+─── ① Preflight (OPTIONS) ─────────────────►
+OPTIONS /post
+Origin: http://moodiary-frontend...
+Access-Control-Request-Method: POST
+Access-Control-Request-Headers: Authorization,Content-Type
+
+                                  ◄─────────  204 No Content
+                                              Access-Control-Allow-Origin: http://moodiary-frontend...
+                                              Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
+                                              Access-Control-Allow-Headers: Authorization, Content-Type, Accept
+                                              Access-Control-Allow-Credentials: true
+                                              Access-Control-Max-Age: 3600
+
+브라우저: 모두 OK → 본 요청 진행
+
+─── ② 본 요청 (POST) ──────────────────────►
+POST /post
+Origin: http://moodiary-frontend...
+Authorization: Bearer eyJhbGc...
+Content-Type: application/json
+{ "title": "...", "content": "..." }
+
+                                  ◄─────────  201 Created
+                                              Access-Control-Allow-Origin: http://moodiary-frontend...
+                                              [body]
+```
+
+→ 모든 요청이 2 번 가는 게 아님. preflight 결과는 `Access-Control-Max-Age` 동안 (Moodiary: 3600초 = 1시간) 브라우저가 캐시. 그 동안 같은 endpoint 의 본 요청은 preflight 없이 바로 감.
+
+### Moodiary 의 실제 CorsConfig
+
+`CorsConfig.java` 의 핵심:
+
+```java
+CorsConfiguration config = new CorsConfiguration();
+
+config.setAllowedOrigins(origins);  // ["http://localhost:5173", "http://moodiary-frontend.s3-website..."]
+                                     // ↑ ENV var APP_CORS_ALLOWED_ORIGINS 로 받음. 와일드카드 X
+
+config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+                                                                   // ↑ OPTIONS 필수 (preflight 자체)
+
+config.setAllowedHeaders(List.of(
+    HttpHeaders.AUTHORIZATION,  // JWT Bearer 헤더
+    HttpHeaders.CONTENT_TYPE,   // JSON body
+    HttpHeaders.ACCEPT
+));
+
+config.setExposedHeaders(List.of(HttpHeaders.LOCATION));
+   // ↑ JS 가 response.headers.get('Location') 로 직접 읽을 수 있는 헤더
+
+config.setAllowCredentials(true);
+   // ↑ 쿠키 / Authorization 헤더를 cross-origin 으로 전송 허용
+
+config.setMaxAge(3600L);
+   // ↑ preflight 캐시 1시간 — 같은 endpoint 매번 OPTIONS 안 보냄
+```
+
+→ 운영에서는 S3 endpoint URL, 로컬에서는 `localhost:5173` (Vite 기본) 을 환경변수로 주입.
+
+### 자주 만나는 함정 / 함의
+
+#### 함정 1: 와일드카드 `*` + `credentials=true` 충돌
+
+```java
+config.setAllowedOrigins(List.of("*"));   // ❌
+config.setAllowCredentials(true);
+```
+
+브라우저가 거절. 이유: 와일드카드는 "아무 origin 다 OK" 인데 거기에 쿠키 / Authorization 까지 보내는 건 보안 무너짐. 정확한 origin 만 적어야 함.
+
+#### 함정 2: CORS 는 **브라우저** 만의 규칙
+
+- Postman / curl / 백엔드 → 백엔드 호출은 CORS 무관 (Origin 헤더 없음 또는 무시)
+- 그래서 Postman 테스트는 다 통과해도, React SPA 에서 호출하면 CORS 에러 가능 — 별도 검증 필수
+
+#### 함정 3: CORS 차단은 **서버가 차단하는 게 아님**
+
+요청은 서버까지 도달함. 서버는 정상 처리하고 응답을 보냄. **브라우저가 응답 헤더를 보고 JS 에 전달 거부**. 즉:
+- 서버 로그에는 "200 OK" 가 찍히는데
+- 브라우저 콘솔에는 "CORS error" 가 뜸
+- DevTools Network 탭에서는 응답이 보이지만 "blocked" 표시
+
+→ "서버는 정상인데 왜 클라이언트가 못 받지" 사고가 여기서 발생.
+
+#### 함의 4: Preflight 는 인증 전에 통과해야
+
+Spring Security 설정에서 **OPTIONS 요청은 인증 검사 X**. Moodiary 의 `SecurityConfig` 가 OPTIONS 를 화이트리스트에 넣었기 때문에 preflight 가 통과 → 본 요청에서야 JWT 검증.
+
+#### 함의 5: 이미 발생한 CORS error 는 "거절된 응답" — 재시도 무의미
+
+CORS 에러는 응답에 ACAO 가 없거나 잘못된 origin 이라 브라우저가 거절한 것. 클라이언트 측 재시도 / 재인증 로직으로 풀리지 않음. **서버 설정 변경만이 답**.
+
+### 발표 시 한 줄
+> "FE 가 S3 도쿄, BE 가 EC2 서울에 있어서 origin 이 완전히 다릅니다. 브라우저의 Same-Origin Policy 가 기본적으로 차단하니까, BE 가 Access-Control-Allow-Origin 응답 헤더로 명시적으로 허용해줘야 합니다. JWT 인증 헤더가 있어서 본 요청 전에 OPTIONS preflight 가 먼저 가고요. 와일드카드 대신 정확한 URL allowlist 만 쓰는데, 이게 credentials=true 와 동시 만족이 가능한 유일한 방식이기 때문입니다."
+
+### 청중 Q&A 대비
+
+**Q. 서버에서 CORS 를 막는 게 아니라 브라우저가 막는다고요?**
+> 맞습니다. 요청은 서버까지 도달하고 서버는 정상 처리해서 응답을 보냅니다. 단지 브라우저가 응답 헤더를 검사해서 ACAO 가 없거나 다르면 JS 의 fetch().then() 에 응답을 안 넘겨주는 거죠. 그래서 서버 로그에는 200 이 찍히는데 클라이언트 콘솔에는 CORS error 가 뜨는 사고가 흔합니다.
+
+**Q. Postman 으로는 되는데 브라우저에서는 안 돼요. 왜?**
+> Postman 은 브라우저가 아니라서 SOP / CORS 검사를 안 합니다. Origin 헤더를 자동으로 박지도 않고요. 그래서 Postman 통과 = 백엔드 정상 동작 증명이지만, 브라우저 통과의 증명은 아닙니다. SPA 통합 테스트가 별도로 필요한 이유.
+
+**Q. 왜 와일드카드를 못 쓰나요?**
+> 와일드카드 자체는 가능합니다 — `allowCredentials=false` 이면. 우리는 JWT Authorization 헤더를 cross-origin 으로 보내기 위해 `allowCredentials=true` 가 필요하고, 이 둘은 동시 사용 불가능하다는 게 표준입니다. 모든 origin 에 쿠키 / Auth 를 풀어주면 보안이 무너지니까요.
+
+**Q. Preflight 가 매 요청마다 가나요? 비효율 아닌가요?**
+> 첫 요청만요. 응답의 Access-Control-Max-Age 동안 (우리는 1시간) 브라우저가 캐시합니다. 같은 endpoint 의 같은 method / headers 조합이면 그 동안 본 요청만 갑니다.
+
+**Q. S3 endpoint 도 와일드카드 패턴 (`*.s3-website.*.amazonaws.com`) 으로 두면 편하지 않나요?**
+> CorsConfig 주석에 적혀 있는 정책 — 패턴 와일드카드는 의도치 않은 다른 S3 버킷도 허용하게 됩니다. 우리 FE 버킷이 아닌 누군가가 자기 S3 사이트에서 우리 API 를 호출할 수 있는 길을 열어주는 셈이라, 정확한 URL 만 명시합니다.
+
+### 코드 위치
+- `src/main/java/hoseo/moodiary/config/CorsConfig.java` — `CorsConfigurationSource` 빈, allowlist / methods / headers / credentials / maxAge 정책
+- `src/main/java/hoseo/moodiary/config/SecurityConfig.java` — `.cors(Customizer.withDefaults())` 가 위 빈을 자동으로 wire, OPTIONS 인증 면제
+- `src/test/java/hoseo/moodiary/config/CorsConfigTest.java` — `@WebMvcTest + @Import(SecurityConfig)` 4 케이스 검증
+- `compose.yaml` — `APP_CORS_ALLOWED_ORIGINS=${APP_CORS_ALLOWED_ORIGINS:-http://localhost:5173}` (default fallback)
+
+### 관련 노트
+- [1번. Refresh Token](#1-refresh-token--왜-access-token-한-개로-부족한가) — JWT Authorization 헤더가 CORS 의 "비단순 요청" 트리거
+- [5번. JWT stateless vs Refresh stateful](#5-jwt-vs-refresh-token-의-본질적-차이--stateless-vs-stateful) — Authorization 헤더 사용 / 쿠키 미사용의 배경
+- [11번. AWS SSM](#11-aws-ssm-run-command--outbound-polling-구조--iam-role--0-인바운드--send-command-한계) — 같은 "보안 그룹" 영역 — SSM 은 인바운드 0, CORS 는 origin allowlist
+
+---
+
 ## 🔄 누적 갱신
 
 이 문서는 **새로운 질문 / 학습이 생길 때마다 추가**된다. 본인이 모르는 걸 묻고 알게 된 모든 기술 개념을 한 곳에 누적.
@@ -461,3 +1101,6 @@ ALTER TABLE ai_response CONVERT TO CHARACTER SET utf8mb4;
 | 일자 | 추가 항목 |
 |---|---|
 | 2026-05-27 | 초안 — Refresh Token (1, 4, 5) + SHA-256 (2, 3) + dev/main 흐름 (6) + SSM 자동화 (7) + ddl-auto 한계 (8) + utf8mb4 (9). PR 10 / PR 4-pre 운영 반영 직후 본인이 발표 / Q&A 준비하며 정리. |
+| 2026-05-28 | 10번 추가 — Spring 비동기 (`@EnableAsync` + `@Async` + DB 상태머신 + race 방지). 발표 슬라이드 5번 "비동기 \| @EnableAsync + ThreadPoolTaskExecutor" 한 줄의 배경 이해 정리. |
+| 2026-05-28 | 11번 추가 — AWS SSM Run Command (outbound polling + IAM role + send-command 한계 + wait/health check 안전망). 기존 7번이 "자동화 범위" 라면 11번은 "SSM 자체의 작동 원리" 로 각도 분리. |
+| 2026-05-28 | 12번 추가 — CORS (SOP / Preflight / allowlist vs 와일드카드). 발표 슬라이드 21번 "보안 — CORS" 정책의 배경 이해. 본인이 "CORS가 뭐야?" 발화로 트리거. |

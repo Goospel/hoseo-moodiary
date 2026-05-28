@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="$lang$">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>$title$</title>
+  <meta name="description" content="Moodiary BE — 작업 중 모르고 물어봐서 배운 기술 개념 누적. 발표 / 면접 / Q&A 대비.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📔</text></svg>">
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-dark: #1e40af;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #475569;
+      --border: #e2e8f0;
+      --code-bg: #0f172a;
+      --code-text: #e2e8f0;
+      --accent: #fef3c7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Pretendard', 'Apple SD Gothic Neo', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+    }
+
+    /* Top nav (sticky) */
+    nav.topnav {
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+      color: white;
+      padding: 14px 24px;
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      font-size: 14px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    }
+    nav.topnav a { color: white; text-decoration: none; opacity: 0.85; transition: opacity .15s; }
+    nav.topnav a:hover { opacity: 1; }
+    nav.topnav .home { font-weight: 700; opacity: 1; font-size: 16px; }
+    nav.topnav .active { opacity: 1; border-bottom: 2px solid white; padding-bottom: 2px; }
+    nav.topnav .spacer { flex: 1; }
+
+    /* Layout */
+    .layout {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 32px;
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+    nav#TOC {
+      position: sticky;
+      top: 70px;
+      align-self: start;
+      max-height: calc(100vh - 90px);
+      overflow-y: auto;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      font-size: 14px;
+    }
+    nav#TOC::before {
+      content: "📑 목차";
+      display: block;
+      font-weight: 700;
+      color: var(--primary-dark);
+      margin-bottom: 12px;
+      font-size: 15px;
+    }
+    nav#TOC ul { list-style: none; padding-left: 16px; margin: 0; }
+    nav#TOC > ul { padding-left: 0; }
+    nav#TOC li { margin: 2px 0; }
+    nav#TOC a {
+      color: var(--muted);
+      text-decoration: none;
+      display: block;
+      padding: 5px 10px;
+      border-radius: 6px;
+      transition: background .12s, color .12s;
+    }
+    nav#TOC a:hover { background: var(--bg); color: var(--primary); }
+
+    /* Article */
+    article {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 40px 48px;
+      min-width: 0;
+    }
+    article > h1:first-child {
+      color: var(--primary);
+      margin: 0 0 8px;
+      font-size: 32px;
+      letter-spacing: -0.01em;
+    }
+    article h1 { color: var(--primary); margin: 48px 0 16px; font-size: 28px; }
+    article h2 {
+      color: var(--primary-dark);
+      margin: 48px 0 16px;
+      font-size: 22px;
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 8px;
+    }
+    article h3 { color: var(--text); margin: 28px 0 12px; font-size: 18px; }
+    article h4 { margin: 20px 0 8px; font-size: 16px; color: var(--primary-dark); }
+    article p { margin: 12px 0; }
+    article blockquote {
+      border-left: 4px solid var(--primary);
+      background: #eff6ff;
+      padding: 14px 20px;
+      margin: 16px 0;
+      color: var(--text);
+      border-radius: 0 8px 8px 0;
+    }
+    article blockquote p { margin: 4px 0; }
+    article code {
+      background: #f1f5f9;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', 'Consolas', monospace;
+      font-size: 0.88em;
+      color: var(--primary-dark);
+    }
+    article pre {
+      background: var(--code-bg);
+      color: var(--code-text);
+      padding: 16px 20px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-family: 'JetBrains Mono', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    article pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      font-size: inherit;
+    }
+    article table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 14px;
+    }
+    article th, article td {
+      border: 1px solid var(--border);
+      padding: 10px 14px;
+      text-align: left;
+      vertical-align: top;
+    }
+    article th { background: #f1f5f9; font-weight: 600; color: var(--primary-dark); }
+    article tr:nth-child(even) td { background: #fafbfc; }
+    article a { color: var(--primary); }
+    article ul, article ol { padding-left: 24px; }
+    article li { margin: 4px 0; }
+    article hr { border: 0; border-top: 2px dashed var(--border); margin: 40px 0; }
+
+    /* Anchor offset (sticky nav) */
+    article :is(h1,h2,h3,h4)[id] { scroll-margin-top: 80px; }
+
+    /* Footer */
+    footer.page-footer {
+      background: #0f172a;
+      color: #cbd5e1;
+      padding: 28px 0;
+      text-align: center;
+      font-size: 14px;
+      margin-top: 40px;
+    }
+    footer.page-footer a { color: #93c5fd; text-decoration: none; }
+    footer.page-footer a:hover { text-decoration: underline; }
+    footer.page-footer .meta { margin-top: 8px; opacity: 0.6; font-size: 12px; }
+
+    /* Mobile */
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; padding: 16px; }
+      nav#TOC { position: static; max-height: 280px; }
+      article { padding: 24px; }
+      article > h1:first-child { font-size: 26px; }
+      article h2 { font-size: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="topnav">
+    <a href="../" class="home">📔 Moodiary BE</a>
+    <a href="../">홈</a>
+    <a href="../slides/">슬라이드</a>
+    <a class="active">학습 노트</a>
+    <span class="spacer"></span>
+    <a href="https://github.com/Goospel/hoseo-moodiary/blob/dev/claude-docs/learning-notes.md" target="_blank" rel="noopener">GitHub 원본</a>
+  </nav>
+
+  <div class="layout">
+    $if(toc)$
+    <nav id="TOC" role="doc-toc">
+      $toc$
+    </nav>
+    $endif$
+    <article>
+      $body$
+    </article>
+  </div>
+
+  <footer class="page-footer">
+    <div>
+      Moodiary Backend · 호서대학교 컴퓨터공학부 졸업프로젝트
+      · <a href="../">홈</a>
+      · <a href="../slides/">슬라이드</a>
+      · <a href="https://github.com/Goospel/hoseo-moodiary">GitHub</a>
+    </div>
+    <div class="meta">
+      이 페이지는 <code>dev</code> push 시 GitHub Actions 가 자동 빌드/배포한다 — 학습 노트가 main 머지 전에도 반영되도록.
+    </div>
+  </footer>
+</body>
+</html>
