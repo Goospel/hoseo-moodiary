@@ -49,8 +49,8 @@ public class OAuth2Service {
     /**
      * OAuth2 로그인 / 가입.
      *
-     * @param provider             path 의 provider (GOOGLE / KAKAO). LOCAL 은 reject.
-     * @param providerAccessToken  provider 측 access token (Stub 모드는 stub:... 형식).
+     * @param provider             path 의 provider (현재 GOOGLE 만). LOCAL 은 reject.
+     * @param providerAccessToken  provider 측 token (Stub 모드는 stub:... 형식).
      * @return access + refresh + userId
      */
     public LoginResponseDto login(AuthProvider provider, String providerAccessToken) {

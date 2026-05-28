@@ -24,6 +24,7 @@
 10. [Spring 비동기 (`@EnableAsync` + `@Async`) — 동기 블로킹 회피 + DB 상태머신 + race 방지](#10-spring-비동기-enableasync--async--동기-블로킹-회피--db-상태머신--race-방지)
 11. [AWS SSM Run Command — outbound polling 구조 + IAM role / 0 인바운드 / send-command 한계](#11-aws-ssm-run-command--outbound-polling-구조--iam-role--0-인바운드--send-command-한계)
 12. [CORS — Same-Origin Policy + 브라우저 차단 메커니즘 + Preflight + allowlist vs 와일드카드](#12-cors--same-origin-policy--브라우저-차단-메커니즘--preflight--allowlist-vs-와일드카드)
+13. [OAuth2 — Token-Exchange 패턴 + audience 검증 (confused deputy) + email_verified 위임의 한계](#13-oauth2--token-exchange-패턴--audience-검증-confused-deputy--email_verified-위임의-한계)
 
 ---
 
@@ -1098,6 +1099,153 @@ CORS 에러는 응답에 ACAO 가 없거나 잘못된 origin 이라 브라우저
 
 ---
 
+## 13. OAuth2 — Token-Exchange 패턴 + audience 검증 (confused deputy) + email_verified 위임의 한계
+
+### 한 줄 요약
+> Google 로그인은 "Google 이 서명한 토큰이니까 그대로 믿자" 가 아니다. **누구를 위해 발급된 토큰인지** ({@code aud}) 와 **Google 이 해당 이메일을 진짜로 검증했는지** ({@code email_verified}) 를 BE 가 한 번 더 확인해야 다른 앱 사용자가 우리 서비스로 가장 가입하는 confused deputy 공격을 막을 수 있다.
+
+### 배경 — OAuth2 흐름은 한 가지가 아니다
+
+OAuth2 는 "사용자가 다른 사이트의 인증을 빌려 우리 사이트에 로그인" 이라는 같은 목적을 여러 방식으로 푼다. SPA + 우리 BE 조합에선 보통 둘 중 하나:
+
+| 방식 | 주체 | 흐름 |
+|---|---|---|
+| **Authorization Code (전통)** | BE 가 OAuth 흐름 주도 | 사용자 → BE → Google redirect → 사용자가 Google 로그인 → Google → BE callback (code) → BE 가 code↔token 교환 → BE 가 user info 호출 |
+| **Token-Exchange (우리)** | FE 가 OAuth 흐름 주도, BE 는 검증만 | 사용자 → FE 의 Google Sign-In 버튼 → Google → FE 가 id_token 직접 받음 → FE → BE 에 `POST /auth/oauth2/google { providerAccessToken }` → BE 가 토큰만 검증 + 사용자 info 추출 |
+
+**우리가 token-exchange 를 고른 이유**:
+1. **SPA / 모바일 친화** — BE 가 redirect / session 관리할 필요 없음. 우리는 어차피 stateless JWT 라 redirect 흐름 도입하면 부정합.
+2. **FE 가 어차피 Google SDK 를 쓴다** — Google Identity Services (GIS) 가 alread popup / button / token 발급 모두 처리. BE 가 같은 일을 또 할 이유 없음.
+3. **API 라인 분리** — BE 는 우리 도메인 (User / Post / Calendar) 만, 외부 provider 흐름은 FE 가 담당. 책임 분리가 깔끔.
+
+### 그래서 BE 는 무얼 받는가 — id_token vs access_token
+
+Google Sign-In 의 모던 flow (GIS) 는 기본적으로 **id_token (JWT)** 을 FE 에 돌려준다. 일부 흐름에선 access_token 도 받을 수 있다. 둘은 결정적으로 다르다:
+
+| 토큰 종류 | 형식 | 정보 | 검증 방식 |
+|---|---|---|---|
+| **id_token** | JWT (header.payload.signature) | payload 에 sub / email / name 등 user info 포함 | **로컬에서 Google JWKS 로 서명 검증** 가능 (네트워크 호출 X) — 또는 tokeninfo endpoint 로 위임 |
+| **access_token** | opaque 문자열 | 자체엔 정보 없음 — Google API 호출 권한만 표현 | Google API 호출 (e.g. `userinfo` endpoint) 로 user info 받아와야 |
+
+우리 선택: **Google 의 `tokeninfo` endpoint 에 위임**.
+- 입력: `GET https://oauth2.googleapis.com/tokeninfo?id_token=<JWT>`
+- Google 이 서명 / 만료 / iss 표준 검증 + payload 를 JSON 으로 풀어서 응답
+- 단점: 매번 외부 HTTP 호출 — 로그인 시점에만 일어나는 일이라 latency 부담 미미
+- 장점: JWT 라이브러리 / JWKS 캐싱 / 키 회전 처리 없이 외부 호출 1번으로 끝남 — 졸업프로젝트 규모에 적절
+
+### 핵심 함의 1 — Google 이 서명했다 ≠ 우리 토큰이다 (audience 검증 / confused deputy)
+
+여기가 보안의 핵심. tokeninfo 응답이 200 OK 면 토큰은 "진짜 Google 이 발급한 valid 토큰". **하지만 누구를 위해 발급된 토큰인지는 따로 확인해야** 한다.
+
+```json
+{
+  "aud": "12345.apps.googleusercontent.com",   ← 토큰의 청중 (audience)
+  "sub": "108273652891234",
+  "email": "alice@gmail.com",
+  "email_verified": "true",
+  "name": "Alice"
+}
+```
+
+**시나리오 — confused deputy**:
+1. 공격자가 자기 Google 앱 (`hacker-app.apps.googleusercontent.com`) 을 만든다.
+2. 자기 앱으로 어떤 사용자 (Alice) 의 Google 로그인을 받는다. Alice 가 동의함.
+3. Alice 의 id_token 을 받은 공격자는 그걸 **우리 BE 의 `/auth/oauth2/google` 에 그대로 던진다**.
+4. **우리가 aud 검증 안 하면**: tokeninfo 가 200 OK + Alice 정보 반환 → 우리가 "Alice 로그인" 으로 처리 → 공격자가 Alice 계정에 접근.
+
+**confused deputy** 이름의 유래: tokeninfo 가 "권한 있는 대리인 (deputy)" 이라 valid 토큰만 잘 검증해주는데, **그 토큰이 어디로 향한 토큰인지** 는 신경 안 씀 — 그 판단은 우리가 해야. "혼란스러운 대리인" 패턴.
+
+**막는 법** — `aud` 클레임이 우리 `GOOGLE_OAUTH_CLIENT_ID` 와 정확히 일치할 때만 통과:
+
+```java
+if (info.aud() == null || !info.aud().equals(expectedAudience)) {
+    throw new OAuth2VerificationException("audience 불일치 — 우리 client_id 용 토큰이 아님");
+}
+```
+
+**왜 이게 우리에 적용되나** — Moodiary 의 client_id (`xxx.apps.googleusercontent.com`) 와 다른 앱의 client_id 는 명시적으로 달라야 한다. tokeninfo 검증은 토큰 발급의 진위만 보장하지, **목적지**는 보장 안 함.
+
+### 핵심 함의 2 — email_verified 위임의 한계
+
+```json
+{ "email": "victim@gmail.com", "email_verified": "false" }
+```
+
+Google 도 가입 시 모든 이메일에 verification mail 을 보내지는 않는다. SSO / Workspace 계정처럼 다른 IdP 가 위임한 이메일은 Google 측에서 검증 안 된 상태일 수 있다.
+
+**시나리오 — 다른 사람 가장 가입**:
+1. 공격자가 자기 Google 계정에 `victim@gmail.com` 을 alias 로 등록 (Google 이 검증 안 한 채로).
+2. Google Sign-In 으로 id_token 발급 — email 필드에 `victim@gmail.com` 들어옴.
+3. 우리가 email_verified 확인 안 하면: "victim@gmail.com" 로 우리 서비스 가입 → 진짜 victim 이 나중에 가입하려 할 때 이메일 중복 차단.
+
+**막는 법** — `email_verified == "true"` 일 때만 통과 (Google 응답은 boolean 이 아니라 **문자열** "true"/"false" 라는 점 주의):
+
+```java
+if (!"true".equals(info.emailVerified())) {
+    throw new OAuth2VerificationException("email_verified=false");
+}
+```
+
+### 핵심 함의 3 — Stub 토글 (`oauth2.client.mode`)
+
+외부 의존성을 분리하기 위해 같은 `OAuth2Provider` 인터페이스의 다른 구현을 부팅 시점에 선택한다:
+
+```java
+@Component
+@ConditionalOnProperty(name = "oauth2.client.mode", havingValue = "stub", matchIfMissing = true)
+public class StubOAuth2Provider implements OAuth2Provider { ... }
+
+@Component
+@ConditionalOnProperty(name = "oauth2.client.mode", havingValue = "http")
+public class HttpGoogleOAuth2Provider implements OAuth2Provider { ... }
+```
+
+- **로컬 dev / 단위 테스트** — `stub` (default). 외부 키 없이 부팅. `stub:{PROVIDER}:{providerId}:{email}:{nickname}` 형식으로 토큰 흉내.
+- **운영 / 시연** — `http`. 실제 Google tokeninfo 호출.
+
+`matchIfMissing=true` 가 핵심 — yaml 에 키가 빠져도 stub 이 active 되어 부팅 폭발 방지. 운영은 env var `OAUTH2_CLIENT_MODE=http` 로 override.
+
+같은 패턴이 PR 4 (AI 어댑터) 의 `ai.client.mode` 에서도 재사용된다. **외부 의존성 차단 = Stub 토글** 이 졸업프로젝트에서 발견한 재사용 가능한 패턴.
+
+### 발표 시 한 줄 비유
+
+> "Google 로그인은 'Google 이 valid 라고 한 ID 카드' 받는 거예요. 근데 그 ID 카드가 우리 가게용으로 발급된 건지 (audience), Google 이 이메일 진짜 본인 거 맞는지 확인했는지 (email_verified) — 이 두 개를 우리가 한 번 더 검사해야 합니다. 안 그러면 다른 가게 ID 카드를 우리 가게에 들이밀면 통과하는 confused deputy 공격에 뚫려요."
+
+### 청중 Q&A 대비
+
+**Q. Google 이 이미 검증한 토큰을 왜 또 검증해요?**
+> Google 은 토큰의 진위 (서명 / 만료) 만 검증해줍니다. 하지만 **그 토큰이 우리 앱을 위해 발급된 건지** 는 모르죠. 토큰의 `aud` 클레임에 발급 대상 client_id 가 박혀 있는데, 그게 우리 `GOOGLE_OAUTH_CLIENT_ID` 와 같을 때만 우리 토큰입니다. 검증 안 하면 누군가 자기 Google 앱으로 받은 사용자 토큰을 우리 BE 에 던져서 그 사용자로 로그인할 수 있어요 — confused deputy 패턴이에요.
+
+**Q. id_token 과 access_token 의 차이가 뭐예요?**
+> id_token 은 JWT 라서 자체에 사용자 정보 (sub / email / name) 가 들어있고 로컬에서 서명 검증 가능. access_token 은 불투명 문자열이라 그 자체로는 정보 없고 Google API 를 호출할 권한만 표현해요. 우리는 id_token 을 받아서 Google tokeninfo endpoint 에 검증 위임합니다 — JWT 라이브러리 / JWKS 캐싱 / 키 회전 처리 없이 외부 호출 1번으로 끝나서 졸업프로젝트 규모에 깔끔합니다.
+
+**Q. 왜 BE 가 redirect 흐름 안 쓰고 FE 가 토큰 받아서 넘기는 방식이에요?**
+> 우리는 stateless JWT 인증이라 BE 에 session 이 없습니다. 그런데 OAuth2 redirect 흐름 (Authorization Code) 은 callback 사이에 state 를 유지해야 해서 stateful 이에요 — 우리 인증 방식과 모순이죠. 그리고 FE 는 어차피 Google SDK 를 쓰는데, BE 가 같은 일을 또 할 이유가 없습니다. SPA / 모바일 친화 방식이고, 책임 분리도 깔끔합니다.
+
+**Q. email_verified 가 string "true" 인 이유는?**
+> Google tokeninfo endpoint 의 응답 명세가 그래요. JSON boolean 이 아니라 string 으로 옵니다. 라이브러리 없이 직접 파싱할 땐 `"true".equals(...)` 로 비교해야 해서 흔히 놓치는 함정입니다.
+
+**Q. Kakao 도 같이 했어요?**
+> 코드 구조는 다 만들어뒀습니다 — `OAuth2Provider` 인터페이스 + `AuthProvider` enum + `POST /auth/oauth2/{provider}` path 변수 — Kakao 추가는 (1) enum 값 1개 + (2) `HttpKakaoOAuth2Provider` 구현 1개로 끝나요. 하지만 졸업프로젝트 범위에서 Kakao Developers 의 "사이트 도메인이 localhost 거부" 가 FE S3 배포 선행을 요구했고, OAuth2 학습 가치는 한 provider 로도 충분히 정리돼서 지금은 Google 하나만 살아있습니다.
+
+**Q. 외부 호출이 실패하면요? Google tokeninfo 가 5xx 던지면?**
+> `OAuth2VerificationException` 으로 통합해서 401 응답. FE 가 재로그인을 유도하도록 합니다. 4xx (토큰 거절) 도 같은 401 — FE 입장에서 둘 다 "재로그인 필요" 로 처리할 수 있게.
+
+### 코드 위치
+- `src/main/java/hoseo/moodiary/service/oauth2/HttpGoogleOAuth2Provider.java` — `RestClient` 로 tokeninfo 호출 + aud / email_verified 검증 + OAuth2UserInfo 추출
+- `src/main/java/hoseo/moodiary/service/oauth2/StubOAuth2Provider.java` — dev / 단위 테스트용 — 외부 HTTP 없이 같은 인터페이스 구현
+- `src/main/java/hoseo/moodiary/service/oauth2/OAuth2Service.java` — provider 측 user 가 우리 DB 에 있으면 로그인, 없으면 가입 + 닉네임 충돌 시 suffix
+- `src/main/java/hoseo/moodiary/controller/AuthController.java` — `POST /auth/oauth2/{provider}` endpoint
+- `src/main/resources/application.yaml` — `oauth2.client.mode` / `oauth2.google.client-id` / `oauth2.google.tokeninfo-url` placeholder
+- `src/test/java/hoseo/moodiary/service/oauth2/HttpGoogleOAuth2ProviderTest.java` — WireMock 으로 mock 한 tokeninfo 의 happy path / 4xx / 5xx / aud 불일치 / email_verified=false 분기
+
+### 관련 노트
+- [1번. Refresh Token](#1-refresh-token--왜-access-token-한-개로-부족한가) — OAuth2 로그인 성공 후 우리가 발급하는 토큰은 LOCAL 로그인과 동일한 access (1h) + refresh (2w) 쌍
+- [5번. JWT stateless](#5-jwt-vs-refresh-token-의-본질적-차이--stateless-vs-stateful) — OAuth2 redirect 흐름 (stateful) 을 우리가 안 쓴 배경
+- [10번. Spring 비동기](#10-spring-비동기-enableasync--async--동기-블로킹-회피--db-상태머신--race-방지) — `@ConditionalOnProperty` 같은 토글 패턴이 PR 4 의 `ai.client.mode` 에서도 재사용
+
+---
+
 ## 🔄 누적 갱신
 
 이 문서는 **새로운 질문 / 학습이 생길 때마다 추가**된다. 본인이 모르는 걸 묻고 알게 된 모든 기술 개념을 한 곳에 누적.
@@ -1111,3 +1259,4 @@ CORS 에러는 응답에 ACAO 가 없거나 잘못된 origin 이라 브라우저
 | 2026-05-28 | 11번 추가 — AWS SSM Run Command (outbound polling + IAM role + send-command 한계 + wait/health check 안전망). 기존 7번이 "자동화 범위" 라면 11번은 "SSM 자체의 작동 원리" 로 각도 분리. |
 | 2026-05-28 | 12번 추가 — CORS (SOP / Preflight / allowlist vs 와일드카드). 발표 슬라이드 21번 "보안 — CORS" 정책의 배경 이해. 본인이 "CORS가 뭐야?" 발화로 트리거. |
 | 2026-05-28 | **10/11/12 → goospel.github.io 공개판 승격** — [spring-async-pattern](https://goospel.github.io/notes/backend/spring-async-pattern/) / [aws-ssm-outbound-polling](https://goospel.github.io/notes/ops/aws-ssm-outbound-polling/) / [cors-fundamentals](https://goospel.github.io/notes/backend/cors-fundamentals/). 4문 자격 통과 (일반화 가능 / 본인 이해 확립 / 같은 스택 누구나 만남 / 검색 키워드 유효) + release PR #66 직후 묶음 임계 (3개) 도달. 글로벌 CLAUDE.md PKM 파이프라인 첫 실 적용. 각 항목 헤더에 공개판 링크 박음. |
+| 2026-05-28 | 13번 추가 — OAuth2 Token-Exchange + audience 검증 (confused deputy) + email_verified 위임의 한계. PR 12-final (Google OAuth2 실어댑터) 작업 직후 — 발표 / Q&A 의 핵심 후보 ("이미 Google 검증한 토큰을 왜 또 검증?" / "id_token vs access_token 차이" / "왜 BE redirect 흐름 안 씀?"). 일반화 가능성 매우 높음 — 다음 묶음 임계 도달 시 goospel.github.io 승격 후보. |

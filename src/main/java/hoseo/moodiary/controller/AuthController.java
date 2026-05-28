@@ -57,18 +57,18 @@ public class AuthController {
         return ResponseEntity.ok(userService.login(requestDto));
     }
 
-    @Operation(summary = "OAuth2 로그인 / 가입 (Google / Kakao)",
-            description = "FE 가 provider (Google / Kakao) 에서 발급받은 access token 을 BE 로 넘기면 " +
-                    "BE 가 provider 서버에 검증 + 사용자 정보 추출 → DB 의 (provider, providerId) 로 기존 사용자 조회. " +
+    @Operation(summary = "OAuth2 로그인 / 가입 (Google)",
+            description = "FE 가 Google Sign-In 으로 발급받은 id_token (또는 access_token) 을 BE 로 넘기면 " +
+                    "BE 가 Google tokeninfo endpoint 에 검증 + 사용자 정보 추출 → DB 의 (provider, providerId) 로 기존 사용자 조회. " +
                     "있으면 로그인, 없으면 신규 가입 + 로그인. 응답은 LOCAL 로그인과 동일한 access + refresh 발급. " +
-                    "PR 12-pre Stub 모드: providerAccessToken 이 `stub:{PROVIDER}:{providerId}:{email}:{nickname}` 형식.")
+                    "Stub 모드 (`oauth2.client.mode=stub`): providerAccessToken 이 `stub:{PROVIDER}:{providerId}:{email}:{nickname}` 형식.")
     @ApiResponse(responseCode = "200", description = "OAuth2 로그인 성공 — access + refresh + userId 반환")
-    @ApiResponse(responseCode = "400", description = "path 의 provider 가 GOOGLE / KAKAO 아니거나 providerAccessToken 빈 값")
-    @ApiResponse(responseCode = "401", description = "Provider 측 토큰 검증 실패 (만료 / invalid / Stub 형식 오류)")
+    @ApiResponse(responseCode = "400", description = "path 의 provider 가 GOOGLE 아니거나 providerAccessToken 빈 값")
+    @ApiResponse(responseCode = "401", description = "Provider 측 토큰 검증 실패 (만료 / invalid / audience 불일치 / email_verified=false)")
     @ApiResponse(responseCode = "409", description = "이메일이 이미 다른 provider 로 가입됨")
     @PostMapping("/oauth2/{provider}")
     public ResponseEntity<LoginResponseDto> oauth2Login(
-            @Parameter(description = "OAuth2 provider — GOOGLE 또는 KAKAO. 대소문자 무관 (path 에서 변환).",
+            @Parameter(description = "OAuth2 provider — 현재 GOOGLE 만 지원. 대소문자 무관 (path 에서 변환).",
                     example = "GOOGLE")
             @PathVariable("provider") AuthProvider provider,
             @Valid @RequestBody OAuth2LoginRequestDto requestDto) {
