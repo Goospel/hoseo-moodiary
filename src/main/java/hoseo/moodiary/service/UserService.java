@@ -43,11 +43,11 @@ public class UserService {
             throw new DuplicateNicknameException(requestDto.getNickname());
         }
 
-        User user = User.builder()
-                .email(requestDto.getEmail())
-                .password(passwordEncoder.encode(requestDto.getPassword()))
-                .nickname(requestDto.getNickname())
-                .build();
+        User user = User.createLocal(
+                requestDto.getEmail(),
+                passwordEncoder.encode(requestDto.getPassword()),
+                requestDto.getNickname()
+        );
 
         return repository.save(user).getId();
     }
