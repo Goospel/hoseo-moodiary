@@ -1,23 +1,26 @@
 # GitHub Pages 자동 배포.
 #
 # 결과 URL: https://goospel.github.io/hoseo-moodiary/
-#   - /                  → site/index.html (landing page)
-#   - /slides/           → presentation/moodiary-be-presentation.md 를 Marp HTML 로 변환
-#   - /learning-notes/   → claude-docs/learning-notes.md 를 pandoc HTML 로 변환
+#   - /          → site/index.html (landing page)
+#   - /slides/   → presentation/moodiary-be-presentation.md 를 Marp HTML 로 변환
+#   - /docs/     → docs-site/ MkDocs Material 사이트
+#                  (claude-docs/* + README.md + docs-site/docs-template/index.md 합쳐서 빌드.
+#                   PR 9 — 기존 /learning-notes/ pandoc 경로는 MkDocs 안의 /docs/learning-notes/ 로 흡수.)
 #
 # 트리거:
-#   - dev push 시 site/** / presentation/** / claude-docs/learning-notes.md 변경된 경우만
-#     (학습 노트가 main 머지 전에도 사이트에 반영되도록 의도적으로 dev 트리거.
-#      site/slides 도 dev 에서 빌드 — dev 는 main 의 superset 이라 안전.)
+#   - dev push 시 site/** / presentation/** / claude-docs/** / docs-site/** / README.md 변경 시
+#     (학습 노트 / 로드맵 / 트러블슈팅 등이 main 머지 전에도 사이트에 반영되도록 의도적 dev 트리거.
+#      slides 도 dev 에서 빌드 — dev 는 main 의 superset 이라 안전.)
 #   - 또는 GitHub UI 에서 수동 실행 (workflow_dispatch)
 #
 # 사전 셋업 (한 번만):
 #   Repo Settings → Pages → Source = "GitHub Actions"
+#   Environments → github-pages → Allowed branches 에 dev 추가 (T-028)
 #
 # 작동 방식:
 #   modern 방식 (gh-pages branch 안 만듦). actions/upload-pages-artifact + deploy-pages.
 
-name: Deploy GitHub Pages (landing + slides + learning-notes)
+name: Deploy GitHub Pages (landing + slides + docs)
 
 on:
   push:
@@ -25,7 +28,9 @@ on:
     paths:
       - 'site/**'
       - 'presentation/**'
-      - 'claude-docs/learning-notes.md'
+      - 'claude-docs/**'
+      - 'docs-site/**'
+      - 'README.md'
       - '.github/workflows/deploy-pages.yaml'
   workflow_dispatch:
 
@@ -41,7 +46,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build site (landing + Marp slides + learning-notes)
+    name: Build site (landing + Marp slides + MkDocs docs)
     runs-on: ubuntu-24.04
 
     steps:
@@ -55,18 +60,21 @@ jobs:
       - name: Install Marp CLI
         run: npm install -g @marp-team/marp-cli@latest
 
-      - name: Install pandoc (for learning-notes.md → HTML)
-        run: sudo apt-get update && sudo apt-get install -y pandoc
+      - name: Setup Python (for MkDocs)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install MkDocs Material
+        run: pip install mkdocs-material pymdown-extensions
 
       - name: Build site
         run: |
           set -euo pipefail
 
           # 1) landing page (site/) 를 _site/ 루트로 복사
-          #    단 pandoc template 파일은 deploy artifact 에서 제외 (HTML 이지만 페이지가 아님)
           mkdir -p _site
           cp -r site/* _site/
-          rm -f _site/learning-notes-template.html
 
           # 2) Marp 슬라이드 → _site/slides/index.html
           mkdir -p _site/slides
@@ -82,21 +90,26 @@ jobs:
             -o _site/slides/moodiary-be-presentation.pdf \
           || echo "::warning::PDF build failed (chromium issue?). HTML 만 deploy 됨."
 
-          # 4) 학습 노트 (claude-docs/learning-notes.md) → _site/learning-notes/index.html
-          mkdir -p _site/learning-notes
-          pandoc claude-docs/learning-notes.md \
-            --from=gfm+pipe_tables+task_lists+autolink_bare_uris \
-            --to=html5 \
-            --standalone \
-            --metadata title="Moodiary BE — 학습 노트" \
-            --metadata lang=ko \
-            --template=site/learning-notes-template.html \
-            --toc \
-            --toc-depth=2 \
-            -o _site/learning-notes/index.html
+          # 4) MkDocs 컨텐츠 준비 — docs-site/docs/ 를 동적으로 생성:
+          #      - docs-template/index.md  → docs/index.md          (사이트 홈)
+          #      - 저장소 루트 README.md   → docs/README.md         (프로젝트 한눈)
+          #      - claude-docs/*           → docs/ 안으로 통째 복사 (plan / learning-notes / troubleshooting / api-contracts / security / ops-runbooks/*)
+          #    (이렇게 분리한 이유 — claude-docs/ 는 Claude 가 보는 작업 가이드 정신을 유지하고,
+          #     MkDocs 는 빌드 시점에만 그걸 *읽기 좋은 사이트* 로 한 번 더 가공한다.)
+          mkdir -p docs-site/docs
+          cp docs-site/docs-template/index.md docs-site/docs/index.md
+          cp README.md docs-site/docs/README.md
+          cp -r claude-docs/* docs-site/docs/
+
+          # 5) MkDocs build → _site/docs/
+          cd docs-site
+          mkdocs build --site-dir ../_site/docs --strict
+          cd ..
 
           echo "::group::Built site tree"
-          find _site -maxdepth 3 -type f | head -40
+          find _site -maxdepth 3 -type d
+          echo "---files---"
+          find _site -maxdepth 3 -type f | head -60
           echo "::endgroup::"
 
       - name: Upload artifact
