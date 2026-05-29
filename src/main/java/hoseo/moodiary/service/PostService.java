@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -69,7 +70,9 @@ public class PostService {
 
     public PostResponseDto update(UUID currentUserId, UUID postId, PostRequestDto requestDto) {
         Post post = loadOwned(currentUserId, postId);
-        post.update(requestDto.getTitle(), requestDto.getContent());
+        // postDate null 폴백은 create 와 일관 — 누락 시 오늘.
+        LocalDate postDate = requestDto.getPostDate() != null ? requestDto.getPostDate() : LocalDate.now();
+        post.update(requestDto.getTitle(), requestDto.getContent(), postDate);
         return toResponse(post);
     }
 
@@ -95,6 +98,7 @@ public class PostService {
                 .id(post.getId())
                 .title(post.getTitle())
                 .content(post.getContent())
+                .postDate(post.getPostDate())
                 .build();
     }
 }

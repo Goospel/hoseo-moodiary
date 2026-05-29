@@ -1,7 +1,7 @@
 # Moodiary Backend — Roadmap
 
 > 백엔드 작업의 **현재 위치 + 다음 경로**. PR 머지 시 갱신.
-> 마지막 갱신: 2026-05-29 (release PR #79 + hot-fix release PR #81 — PR 12 Google OAuth2 풀체인 운영 반영 완료. T-031/T-032 함정 박힘.)
+> 마지막 갱신: 2026-05-29 (Post.postDate 필드 추가 — "지나간 날짜의 일기" 시나리오 지원. RDS 사전 ALTER 필요.)
 >
 > 📚 **상세는 다른 문서로 위임**:
 > - [`api-contracts.md`](./api-contracts.md) — API 명세 (request/response/예시/외부 AI 계약)
@@ -132,6 +132,7 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 | access 1h / refresh 2w | 자주 쓰이는 건 짧게 (탈취 노출 최소), 거의 안 쓰이는 건 길게 (UX 유지) |
 | `@AuthenticationPrincipal UUID` 패턴 | 컨트롤러 시그니처 깔끔 |
 | GET /post 본인 글만 | 일기 도메인, 캘린더 일관 |
+| `Post.postDate` (LocalDate, NOT NULL) + 누락 시 today 폴백 | 일기 앱의 표준 "어느 날의 일기인가" 분리. `createdAt` (자동 작성 시점) 과 의미 분리 — "지나간 날짜의 일기" 시나리오 지원. 서버 폴백으로 FE 가 명시 안 해도 "오늘 일기" 기본 동작. 미래 날짜 server-side 검증은 박지 않음 (필요해지면 `@PastOrPresent` 추가). |
 | `application.yaml` 추적 + env var 플레이스홀더 | gitignore 사고 ([T-013](./troubleshooting.md#t-013)) 재발 차단 |
 | `ddl-auto: update` (안정화 시 validate) | 스키마 미확정 단계 손DDL 부담 제거 |
 | 열거 공격 방지 401 | 이메일 존재 노출 X |
@@ -159,6 +160,7 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 
 | 일자 | 변경 |
 |---|---|
+| 2026-05-29 | **Post 에 `postDate` (LocalDate) 추가** — 사용자가 "지나간 날짜에 대한 일기" 작성 시 명시. 누락 시 서버가 `LocalDate.now()` 로 폴백 (기본 = "오늘 일기"). `createdAt` (자동) 과 별개. Request/Response DTO 모두 yyyy-MM-dd 포맷. update 시 변경 가능. `api-contracts.md` 의 Post 엔드포인트 4개 + 의사결정 로그 갱신. **운영 머지 전 RDS ALTER 필수** (`ddl-auto: update` 가 NOT NULL 추가 못 함 — T-019 교훈 5번). |
 | 2026-05-29 | **release PR #81 — T-031/T-032 hot-fix 운영 반영** — release PR #79 의 deploy 직후 발견된 함정 2건 (path enum case-sensitivity / silent 500 진단 가림막) 의 fix #80 을 main 으로. dev → main merge 충돌은 `-X ours` 패턴으로 자동 해결 (의사결정 로그 참조). 운영 검증: `/auth/oauth2/google` (소문자) → 401 정상 / `/auth/oauth2/twitter` → 400 정상. |
 | 2026-05-29 | **fix PR #80 — OAuth2 path case-insensitive + GlobalExceptionHandler 진단 로깅** — release #79 직후 발견한 두 함정 같이. controller 가 `String` 으로 받아 `.toUpperCase()` 정규화 + 신규 `InvalidOAuth2ProviderException` (400). `@Slf4j` + `log.error` 추가. 테스트 5 케이스 추가 (소/대/혼합 case + 미지원 + LOCAL service-level reject). troubleshooting [T-031](./troubleshooting.md#t-031) / [T-032](./troubleshooting.md#t-032). |
 | 2026-05-29 | **release PR #79 — PR 9 MkDocs + PR 12 Google OAuth2 풀체인 + PKM 첫 사이클 (#67~#78) 운영 반영** — dev → main merge 가 main 의 release squash commit 들과 충돌 → `-X ours` 패턴으로 dev (semantic superset) 우선 자동 해결 후 push. 운영 머지 전 체크리스트 4건 모두 ✅ (compose env passthrough / GitHub Secrets / EC2 .env / RDS ALTER 4건). CD 성공 후 운영 검증에서 [T-031](./troubleshooting.md#t-031) 발견 → 즉시 hot-fix #80 + release #81 사이클로 fix. |
