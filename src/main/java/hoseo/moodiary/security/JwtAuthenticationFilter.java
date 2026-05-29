@@ -51,6 +51,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             } catch (JwtException | IllegalArgumentException e) {
                 // 검증 실패는 무시하고 통과 — 인증 없는 상태로 다음 필터에 전달.
                 // 보호된 자원이면 AuthorizationFilter가 401로 거절한다.
+                //
+                // T-033 의도적 silent — 이 catch 는 모든 인증 요청을 거치는 high-volume 경로다.
+                // 만료 / 위조 / 잘못된 형식 토큰 셋 다 "예상되는 클라이언트 실수" 라 log 떨어뜨리면
+                // 분당 수백 라인 floods 가능 (특히 만료된 토큰을 가진 SPA 가 refresh 직전 다수 호출).
+                // T-032 의 "silent 500 = 진단 불가" 와는 카테고리가 다른 의도적 침묵.
+                // 만약 운영에서 "JWT 인증 실패율" 모니터링이 필요해지면 별도 metrics counter 로 추가
+                // (로그가 아닌 메트릭이 적절한 채널 — Micrometer + Prometheus).
                 SecurityContextHolder.clearContext();
             }
         }

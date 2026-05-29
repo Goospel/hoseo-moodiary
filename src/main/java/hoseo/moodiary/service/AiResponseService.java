@@ -11,6 +11,7 @@ import hoseo.moodiary.repository.PostJpaRepository;
 import hoseo.moodiary.service.ai.AiInferenceResult;
 import hoseo.moodiary.service.ai.AiResponseClient;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +30,7 @@ import java.util.UUID;
  * <p>PENDING row 의 *생성* 은 {@code PostService.create()} 가 일기 저장과 같은 트랜잭션에서 직접 처리한다
  * (정합성 보장 — 일기는 저장됐는데 PENDING row 가 없는 상태가 발생하지 않도록).
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional
@@ -60,6 +62,10 @@ public class AiResponseService {
             AiInferenceResult result = client.invoke(postId, post.getTitle(), post.getContent());
             aiResponse.markDone(result.content(), result.emoji());
         } catch (AiInferenceException e) {
+            // DB 의 FAILED 상태 + error_message 가 1차 진단 채널이지만 — 로그도 같이 떨어뜨려서
+            // 운영 grep 만으로 "최근 1시간 AI 실패 건수" 가 보이게 한다 (T-033).
+            // WARN 레벨: 예상된 외부 fault — 우리 코드 버그 아니라 ERROR 아님.
+            log.warn("AI inference failed for postId={} — DB FAILED 상태로 마킹", postId, e);
             aiResponse.markFailed(e.getMessage());
         }
         // dirty checking — 트랜잭션 commit 시점에 update.
