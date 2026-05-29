@@ -26,6 +26,7 @@
 12. [CORS — Same-Origin Policy + 브라우저 차단 메커니즘 + Preflight + allowlist vs 와일드카드](#12-cors--same-origin-policy--브라우저-차단-메커니즘--preflight--allowlist-vs-와일드카드)
 13. [OAuth2 — Token-Exchange 패턴 + audience 검증 (confused deputy) + email_verified 위임의 한계](#13-oauth2--token-exchange-패턴--audience-검증-confused-deputy--email_verified-위임의-한계)
 14. [Silent catch 의 두 얼굴 — 의도적 침묵 (high-volume) vs 운영 사고 (저-volume) + 메트릭 채널](#14-silent-catch-의-두-얼굴--의도적-침묵-high-volume-vs-운영-사고-저-volume--메트릭-채널)
+15. [Mixed Content — HTTPS 페이지의 HTTP API 호출은 브라우저가 *요청 전에* 차단 (Vercel rewrites 가 빠른 해결책)](#15-mixed-content--https-페이지의-http-api-호출은-브라우저가-요청-전에-차단-vercel-rewrites-가-빠른-해결책)
 
 ---
 
@@ -1377,6 +1378,160 @@ catch (SignatureException e)     { metrics.failures("invalid_signature").increme
 
 ---
 
+## 15. Mixed Content — HTTPS 페이지의 HTTP API 호출은 브라우저가 *요청 전에* 차단 (Vercel rewrites 가 빠른 해결책)
+
+### 한 줄 요약
+> **HTTPS 페이지에서 HTTP API 를 fetch 하면 브라우저가 요청을 보내기 전에 차단한다 (Active Mixed Content).** 서버는 영원히 그 요청을 받지 않으니 서버 측 로그/CORS/방화벽으로는 절대 진단되지 않는다 — "왜 EC2 로그에 아무것도 안 찍히지?" 가 결정적 단서. 빠른 해결책은 BE HTTPS 가 아니라 **FE 의 same-origin reverse-proxy** (Vercel rewrites / Netlify redirects / Next.js rewrites).
+
+### 문제 — 우리 프로젝트의 정확한 시나리오
+
+졸업 데모를 위해 FE 가 S3 대신 **Vercel** 로 먼저 배포 시도. 회원가입 호출이 브라우저에서 차단되며 "왜 차단되는지" 가 한참 안 잡힘.
+
+| 측 | URL | 프로토콜 |
+|---|---|---|
+| FE 페이지 | `https://moo-diary-ten.vercel.app` | **HTTPS** (Vercel 자동) |
+| BE API | `http://15.165.95.129:8080/auth/login` | **HTTP** (EC2 + Docker, HTTPS 미구성) |
+
+Vercel / Netlify / Cloudflare Pages / Render 등 모던 PaaS 는 **자동으로 HTTPS** 를 붙인다 (Let's Encrypt 백그라운드). 의도 없이 HTTPS 가 자동으로 활성화됨. BE 는 의도적으로 HTTP-only — 도메인/인증서 작업이 졸업 범위 초과라.
+
+이 두 결정이 합쳐지면서 **Mixed Content** 가 발생.
+
+### 메커니즘 — 왜 EC2 로그에 아무것도 안 찍히나
+
+모던 브라우저 (Chrome 80+, Firefox 23+, Safari 9+) 의 **Mixed Content Blocker**:
+
+1. HTTPS 로 로드된 페이지가 그 안에서 HTTP 리소스 요청을 시도한다.
+2. 브라우저가 **요청을 네트워크에 보내기 전에 차단**한다.
+3. DevTools Console 에 `Mixed Content: The page at 'https://...' was loaded over HTTPS, but requested an insecure XMLHttpRequest endpoint 'http://...'. This request has been blocked` 비슷한 메시지.
+4. **EC2 (=서버) 에는 패킷 자체가 도달하지 않는다** — accesslog / docker logs / nginx 어디에도 그 요청의 흔적 없음.
+
+이 "서버 측 로그 0" 신호가 결정적이다 — **CORS preflight 거절** 이나 **방화벽 차단** 이면 OPTIONS / TCP SYN 정도는 서버까지 도달해서 로그가 남는다. Mixed Content 는 **클라이언트 단 한 단계 위**에서 죽는다.
+
+### Active vs Passive — 왜 fetch 만 죽고 이미지는 살아남는가
+
+브라우저는 mixed content 를 두 종류로 분류한다:
+
+| 종류 | 예시 | 처리 |
+|---|---|---|
+| **Active** | `fetch()`, `XHR`, `<script>`, `<iframe>`, `<link rel=stylesheet>` | **자동 차단** (사용자 개입 불가) |
+| **Passive** | `<img>`, `<audio>`, `<video>` (poster 제외) | **경고만** 띄우고 통과 (브라우저별 다름) |
+
+API 호출은 active — XHR/fetch 라 무조건 차단. 이미지를 HTTPS 페이지에서 HTTP 로 띄우는 건 가능하지만 (deprecated 흐름 중) API 는 절대 불가.
+
+> Active 만 막는 이유: passive 리소스가 변조되면 시각적 사기 정도지만, active 가 변조되면 페이지 DOM / 쿠키 / 토큰 / 비밀번호 전부 노출 → 위협 수준이 다르다.
+
+### 왜 CORS preflight 거절과 헷갈리는가
+
+증상 모양이 비슷해 보인다:
+- DevTools 의 Network 탭에서 요청이 "failed"
+- 서버에서 200/400/401 응답 본 적 없음
+- Console 에 빨간 에러
+
+차이:
+
+| 단계 | CORS 실패 | Mixed Content 차단 |
+|---|---|---|
+| OPTIONS preflight | 브라우저가 보냄 → 서버 도달 | **안 보냄** — 차단이 더 앞 단계 |
+| 서버 accesslog | OPTIONS 흔적 있음 | **완전 비어있음** |
+| Console 메시지 | `CORS policy: No 'Access-Control-Allow-Origin'...` | `Mixed Content: ... has been blocked` |
+| Fix 채널 | 서버 (`@CrossOrigin` / `CorsConfig`) | 클라이언트 측 (URL 자체) |
+
+이 프로젝트의 CORS 는 이미 잡혀있다 ([12번. CORS](#12-cors--same-origin-policy--브라우저-차단-메커니즘--preflight--allowlist-vs-와일드카드)). EC2 보안 그룹도 8080 열려있다. 그런데 차단됐다 — CORS / 방화벽 가설을 버리고 Mixed Content 로 좁히는 게 진단의 핵심 분기점.
+
+### 해결 옵션 비교
+
+| 옵션 | 작업량 | 비용 | 졸업 범위 | 지속성 |
+|---|---|---|---|---|
+| **A. FE 의 reverse-proxy** (Vercel rewrites / Next.js rewrites / Netlify redirects) ⭐ | 작음 — `vercel.json` 1줄 + API base URL 변경 | 0 | ✅ 내 | 데모용 충분 |
+| **B. BE 에 HTTPS** (EC2 + nginx + Let's Encrypt + 무료 도메인 (Duck DNS)) | 중 — BE 인프라 반나절 | 0 | 경계 (인프라 학습 +) | 영구 |
+| **C. CloudFront 앞단 HTTPS** | 중 — AWS 리소스 + 도메인 | 도메인 ~만원/년 | 경계 | 영구 |
+| **D. FE 를 S3 (HTTP) 로** — 원래 plan 복귀 | 중 — FE 재배포 | 0 | ✅ 내 | 데모용 |
+
+### ⭐ 추천 — A. FE Reverse Proxy
+
+**왜**: 가장 빠르다. BE / DNS / 인증서 작업 전부 회피. **CORS 도 자동 해결** (브라우저 입장에서 same-origin 이 되니까 SOP 통과 + preflight 미발생).
+
+#### 메커니즘
+
+```
+[브라우저 https]
+    ↓ fetch("/api/auth/login")   ← 같은 도메인 (same-origin, mixed 아님)
+[Vercel 엣지 서버]
+    ↓ proxy http://15.165.95.129:8080/auth/login   ← 서버 간 통신, 브라우저 무관
+[EC2 BE]
+```
+
+브라우저 입장에서는 `https://moo-diary-ten.vercel.app/api/auth/login` 으로만 보임 — same-origin HTTPS. Mixed Content / CORS 둘 다 적용 대상 아님. Vercel 의 엣지 노드가 HTTPS 받아서 BE 로 HTTP 프록시 — 서버 간 통신이라 브라우저 Mixed Content 정책 무관.
+
+#### FE 설정 (Vercel — `vercel.json` 레포 루트)
+
+```json
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "http://15.165.95.129:8080/:path*" }
+  ]
+}
+```
+
+#### FE 의 API 호출 base URL
+
+| 변경 전 | 변경 후 |
+|---|---|
+| `http://15.165.95.129:8080/auth/login` | `/api/auth/login` |
+| `http://15.165.95.129:8080/post` | `/api/post` |
+
+`.env` 의 `VITE_API_BASE_URL` (또는 비슷한) 을 `/api` 로.
+
+#### BE 측 작업 — 사실상 없음
+
+CORS allowlist 에 `https://moo-diary-ten.vercel.app` 추가는 권장 (rewrites 안 거치는 경로 대비). 다만 rewrites 만 쓰면 BE 입장에서 origin 이 EC2 자기 자신이라 CORS preflight 자체가 안 일어남.
+
+### 일반화 — 다른 PaaS 도 같은 패턴
+
+| PaaS | 설정 파일 | 키 |
+|---|---|---|
+| Vercel | `vercel.json` | `rewrites` |
+| Netlify | `netlify.toml` 또는 `_redirects` | `[[redirects]]` |
+| Cloudflare Pages | `_redirects` 또는 Functions | `proxy` |
+| Next.js (어디서든) | `next.config.js` | `rewrites()` (서버 컴포넌트) |
+| Vite (개발 모드만) | `vite.config.ts` | `server.proxy` |
+
+**핵심**: 어느 PaaS 든 "FE 호스팅 도메인에서 BE 로 server-side proxy" 를 한 줄이면 설정. 브라우저는 same-origin 만 봐서 mixed content / CORS 무관.
+
+### 발표 시 한 줄 비유
+
+> "안전한 학교 (HTTPS 페이지) 안에 들어와 있는 학생 (브라우저) 이 학교 밖 안전 안 보장 (HTTP) 으로 편지 보내려는 걸 경비원 (Mixed Content Blocker) 이 우편함에 넣기 전에 가로채는 격. 학교 직원 (서버) 은 그 편지가 오려고 했다는 사실조차 모름."
+
+### Q&A 대비
+
+**Q. Mixed Content 와 CORS, 둘 다 브라우저가 차단하는 거 아냐? 뭐가 달라?**
+A. 적용 시점이 다름. Mixed Content 는 **요청 직전 (네트워크 호출 전)**, CORS 는 **응답 검사 (서버까지 갔다가 응답 받은 뒤)**. 그래서 서버 로그에 흔적이 남으면 CORS, 안 남으면 Mixed Content 후보. 또 Mixed Content 는 **프로토콜 (https↔http)** 차이가 트리거, CORS 는 **origin (호스트:포트)** 차이가 트리거 — 같은 프로토콜이어도 다른 도메인이면 CORS, 같은 도메인이어도 다른 프로토콜이면 Mixed Content.
+
+**Q. 왜 단순 reverse-proxy 가 CORS 까지 해결하지?**
+A. 브라우저는 "사용자가 본 페이지의 origin" 과 "fetch 가 가는 URL 의 origin" 을 비교. reverse-proxy 를 쓰면 fetch URL 이 `/api/...` 라 **같은 도메인** 으로 분류되고 SOP 통과 → preflight 자체가 안 일어남. 브라우저는 Vercel 의 엣지가 백엔드로 어디로 프록시하든 모름 — 그건 서버 간 통신이라 브라우저 정책 범위 밖.
+
+**Q. 그냥 BE 에 HTTPS 붙이는 게 정도 아니야? 왜 우회를 추천?**
+A. BE HTTPS 는 옳다 — 운영 영구 운영할 거면 무조건. 하지만 졸업 데모 마감 시점에 BE HTTPS 작업 (도메인 등록 / DNS / Let's Encrypt / nginx 또는 ALB+ACM / Spring 측 HTTPS 또는 reverse-proxy) 은 **인프라 학습 자체로 큰 비중**이라 졸업 범위 분배상 비효율. 빠른 데모 통과 → 졸업 종료 후 시간 남으면 BE HTTPS 로 정도화가 trade-off 우위.
+
+**Q. Vercel rewrites 도 결국 Vercel 엣지가 EC2 로 HTTP 요청을 보내잖아 — 보안 안 좋은 거 아냐?**
+A. 맞다. **사용자 ↔ Vercel 까지는 HTTPS (TLS 1.3) 로 안전**, **Vercel ↔ EC2 사이는 HTTP** — 이 구간은 평문. AWS 내부망 또는 같은 리전 같으면 위험이 줄지만, 완전한 보안은 BE 도 HTTPS 가 정도. **데모용** 으로는 충분하지만 운영 정착 시점에 BE HTTPS 또는 BE 와 Vercel 사이 별도 mTLS / 사설 네트워크 검토. 졸업 데모 외 운영 단계 가면 옵션 B / C 로 이전.
+
+**Q. 우리 plan.md 에 "프론트 = S3 only" 라고 명시한 결정이 왜 깨졌어?**
+A. 그 결정의 의도가 정확히 이걸 회피하려던 것. S3 정적 호스팅은 HTTP 라 두 쪽 다 HTTP → Mixed Content 미발생. **Vercel 의 자동 HTTPS 가 그 가정을 깬 것이 본질** — FE 가 S3 셋업이 막혀서 Vercel 로 가는 우회 결정을 내릴 때 의사결정 로그의 컨텍스트가 흡수 안 됨. 의사결정 로그가 "왜 이렇게 정했는지" 만 적혀 있고 "FE 가 다른 호스팅 으로 갈 때는 …" 의 후속 조건이 없어서 깨짐. 일반 교훈: **결정 + 그 결정이 의존하는 가정** 둘 다 명시해야 결정이 흔들릴 때 알람이 울림.
+
+### 코드 위치 — 이 프로젝트
+
+이 함정은 **BE 코드가 아닌 FE 설정 + 의사결정 로그**가 위치. BE 측에는 변경 없음.
+
+- `claude-docs/plan.md` 의 의사결정 로그 — "프론트 = S3 only (CloudFront/도메인 X)" 항목의 가정 (S3 = HTTP) 이 Vercel HTTPS 와 충돌함을 후속 sweep 에서 보강 필요.
+- FE 레포 (별도) — `vercel.json` 의 rewrites 설정 + API base URL 변경.
+
+### 관련 노트
+- [12번. CORS](#12-cors--same-origin-policy--브라우저-차단-메커니즘--preflight--allowlist-vs-와일드카드) — Mixed Content 와 가장 자주 혼동되는 함정. 두 정책의 적용 시점 / 트리거 / fix 채널 비교 표 참조.
+- [6번. dev 와 main](#6-dev-와-main-의-의미--왜-dev-머지로는-운영-반영-안-되나) — 인프라 결정이 한 쪽만 바뀌면 다른 쪽 가정이 깨지는 패턴 (BE 의 CD 트리거 가정 vs FE 의 호스팅 가정).
+
+---
+
 ## 🔄 누적 갱신
 
 이 문서는 **새로운 질문 / 학습이 생길 때마다 추가**된다. 본인이 모르는 걸 묻고 알게 된 모든 기술 개념을 한 곳에 누적.
@@ -1392,3 +1547,4 @@ catch (SignatureException e)     { metrics.failures("invalid_signature").increme
 | 2026-05-28 | **10/11/12 → goospel.github.io 공개판 승격** — [spring-async-pattern](https://goospel.github.io/notes/backend/spring-async-pattern/) / [aws-ssm-outbound-polling](https://goospel.github.io/notes/ops/aws-ssm-outbound-polling/) / [cors-fundamentals](https://goospel.github.io/notes/backend/cors-fundamentals/). 4문 자격 통과 (일반화 가능 / 본인 이해 확립 / 같은 스택 누구나 만남 / 검색 키워드 유효) + release PR #66 직후 묶음 임계 (3개) 도달. 글로벌 CLAUDE.md PKM 파이프라인 첫 실 적용. 각 항목 헤더에 공개판 링크 박음. |
 | 2026-05-28 | 13번 추가 — OAuth2 Token-Exchange + audience 검증 (confused deputy) + email_verified 위임의 한계. PR 12-final (Google OAuth2 실어댑터) 작업 직후 — 발표 / Q&A 의 핵심 후보 ("이미 Google 검증한 토큰을 왜 또 검증?" / "id_token vs access_token 차이" / "왜 BE redirect 흐름 안 씀?"). 일반화 가능성 매우 높음 — 다음 묶음 임계 도달 시 goospel.github.io 승격 후보. |
 | 2026-05-29 | 14번 추가 — Silent catch 의 두 얼굴 (의도적 침묵 vs 운영 사고) + 메트릭 채널. T-033 sweep 직후 사용자의 "JwtFilter 의 의도적 침묵이 뭐냐" 발화로 트리거. **Volume × 가시성 trade-off 매트릭스** 라는 일반화 가능한 분류 박음. 발표 / Q&A 의 "로그 어떻게 관리?" / "관찰성 (observability) 어떻게?" / "보안 이벤트 추적?" 답할 토대. 일반화 가능성 매우 높음 — 다음 묶음 임계 도달 시 goospel.github.io 승격 후보. |
+| 2026-05-29 | 15번 추가 — Mixed Content (HTTPS 페이지의 HTTP API 호출을 브라우저가 *요청 전에* 차단) + FE reverse-proxy (Vercel rewrites) 패턴. FE 가 S3 대신 Vercel 배포 시도하면서 자동 HTTPS ↔ EC2 HTTP 충돌로 발견. **EC2 로그에 0줄** 이 결정적 진단 단서. plan.md 의 "프론트 = S3 only" 결정이 의존하던 가정 (S3 = HTTP) 이 Vercel 자동 HTTPS 와 충돌해 깨짐 — "결정 + 의존 가정" 명시 일반 교훈도 박음. 일반화 가능성 매우 높음 (Vercel/Netlify/Cloudflare Pages 어디서나 같은 패턴) — **13 + 14 + 15 = 3개 묶음 임계 도달, 다음 release 직후 goospel.github.io 승격 후보**. |
