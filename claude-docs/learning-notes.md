@@ -25,6 +25,7 @@
 11. [AWS SSM Run Command — outbound polling 구조 + IAM role / 0 인바운드 / send-command 한계](#11-aws-ssm-run-command--outbound-polling-구조--iam-role--0-인바운드--send-command-한계)
 12. [CORS — Same-Origin Policy + 브라우저 차단 메커니즘 + Preflight + allowlist vs 와일드카드](#12-cors--same-origin-policy--브라우저-차단-메커니즘--preflight--allowlist-vs-와일드카드)
 13. [OAuth2 — Token-Exchange 패턴 + audience 검증 (confused deputy) + email_verified 위임의 한계](#13-oauth2--token-exchange-패턴--audience-검증-confused-deputy--email_verified-위임의-한계)
+14. [Silent catch 의 두 얼굴 — 의도적 침묵 (high-volume) vs 운영 사고 (저-volume) + 메트릭 채널](#14-silent-catch-의-두-얼굴--의도적-침묵-high-volume-vs-운영-사고-저-volume--메트릭-채널)
 
 ---
 
@@ -1246,6 +1247,136 @@ public class HttpGoogleOAuth2Provider implements OAuth2Provider { ... }
 
 ---
 
+## 14. Silent catch 의 두 얼굴 — 의도적 침묵 (high-volume) vs 운영 사고 (저-volume) + 메트릭 채널
+
+### 한 줄 요약
+> 똑같이 "catch 하고 log 안 떨어뜨림" 패턴이라도 **path 의 volume 에 따라 fix 방향이 정반대** — 저-volume 핸들러의 silent 는 운영 사고 (반드시 log 추가), high-volume 핸들러의 silent 는 의도적 설계 (log 박으면 디스크 폭발 — metrics 채널이 정답).
+
+### 문제 — 같은 모양 다른 의도
+
+두 catch 가 거의 똑같이 생겼다고 가정:
+
+```java
+// Case A — GlobalExceptionHandler.handleException
+catch (Exception e) {
+    return ResponseEntity.status(500).body(...);   // log 0
+}
+
+// Case B — JwtAuthenticationFilter
+catch (JwtException | IllegalArgumentException e) {
+    SecurityContextHolder.clearContext();           // log 0
+}
+```
+
+코드 모양만 보면 둘 다 "silent swallow" — sweep 으로 잡으면 둘 다 "fix 후보" 로 식별. 하지만:
+- **A 는 운영 사고** — 진단 가시성 0 이라 무조건 fix (T-032 본인).
+- **B 는 의도적 설계** — 절대 fix 하면 안 됨 (운영 폭발).
+
+이 둘을 판별하는 기준이 **path 의 volume**.
+
+### 핵심 차이 — Volume
+
+| 항목 | A (GlobalExceptionHandler) | B (JwtAuthenticationFilter) |
+|---|---|---|
+| 호출 빈도 | **드물게** — unhandled 예외 발생 시점만 (= 우리 코드의 버그) | **모든 요청** — Authorization 헤더 들어오는 모든 API 호출 |
+| 정상 흐름의 발생 빈도 | 0건 (예외 = 비정상) | 자연 발생 (만료 토큰 / 옛 토큰 / 봇 spam) |
+| log 박았을 때 일자 사이즈 | 분당 0~1줄 (사고 시점만) | **분당 수백~수천 줄** (특히 봇 spam 시) |
+
+**volume 의 분기점** → "이 catch 는 분당 몇 번 발생할 수 있는가?" 가 첫 질문. 답이 "사고 시점만" 이면 fix. 답이 "100건/분 이상 가능" 이면 의도적 침묵 + 다른 채널.
+
+### 왜 high-volume 에 log 박으면 폭발하는가
+
+JwtAuthenticationFilter 의 catch 가 trigger 되는 시나리오들:
+
+| 시나리오 | 정상 / 비정상 | 발생 빈도 (졸업 demo 규모) |
+|---|---|---|
+| 사용자 access token 만료 직전 마지막 호출 | 정상 | 사용자당 매 1시간 |
+| FE 가 localStorage 옛 토큰으로 reload | 정상 | 새 탭 / 새 기기 / 캐시 클리어 시 |
+| 봇 / 보안 스캐너 임의 토큰 spam | 비정상 (외부) | **분당 수백 ~ 수천** |
+| JWT secret 변경 후 옛 토큰 | 운영 자연스러움 | 배포 직후 1~2분 일시 폭증 |
+
+봇 spam 한 번에 1시간 동안 30만 라인 폭발 가능. 디스크 / log aggregation 비용 모두 폭발 + 진짜 사고 (T-032 같은 unhandled) 의 ERROR 가 묻혀버림.
+
+### 그렇다고 "JWT 인증 실패율" 가시성을 포기하는 건 아님 — 메트릭 채널
+
+운영자 입장에선 **"오늘 JWT 인증 실패 추세"** 보고 싶음. 보안 사고 (공격 시도) 감지의 1차 신호. 그래서 채널 분리:
+
+| 채널 | 표현 단위 | 적합한 use case |
+|---|---|---|
+| **로그 (log.warn)** | 줄 단위 — 시각 + 컨텍스트 + stack trace | **저-volume** + 사고 시점 진단 |
+| **메트릭 (Counter)** | rate / 누적 카운트 — 줄 X 숫자 | **high-volume** + 추세 / 알람 |
+
+JWT 인증 실패는 메트릭이 정답:
+
+```java
+// (도입 시점 예상 코드 — Micrometer)
+@Component
+class JwtAuthMetrics {
+    private final Counter failures;
+    JwtAuthMetrics(MeterRegistry r) {
+        this.failures = Counter.builder("auth.jwt.failure")
+            .tag("reason", "expired|malformed|invalid_signature")
+            .register(r);
+    }
+}
+
+// JwtAuthenticationFilter 안
+catch (ExpiredJwtException e)    { metrics.failures("expired").increment(); ... }
+catch (MalformedJwtException e)  { metrics.failures("malformed").increment(); ... }
+catch (SignatureException e)     { metrics.failures("invalid_signature").increment(); ... }
+```
+
+이러면 Prometheus 가 1초에 한 번 카운터를 긁어서 **시계열 그래프** + **분당 rate 계산** + **알람 룰** ("분당 100건 초과 시 Slack 알림") 까지 가능. 로그 줄 1개도 안 적고도 가시성 완전.
+
+졸업프로젝트 현재 상태:
+- 메트릭 도입 안 함 (PR 6 Flyway / PR 4-final 같은 인프라가 더 시급).
+- JwtFilter 의 catch 는 docstring 으로 "의도적 침묵 + 운영 시 메트릭 도입 권유" 명시 — 미래의 자신 / 다음 sweep 가 잘못 fix 안 하게 방어.
+
+### 일반화 — Volume × 가시성 trade-off 매트릭스
+
+| Volume | 채널 | 결정 |
+|---|---|---|
+| **저 (분당 0~10건)** | 로그 | **catch 마다 log 박기** — 가시성 0 이 사고 |
+| **중 (분당 10~100건)** | 로그 + 샘플링 (1/N) | 부분 로그 + 메트릭 병행 |
+| **고 (분당 100건 이상)** | 메트릭 단독 | **로그 절대 X** — floods 위험 |
+
+분기점은 절대값 아닌 **인프라 처리 능력 대비**. 우리 EC2 + docker logs 는 분당 수십 줄까진 무관, 수백 줄부터 디스크 / grep 성능 영향, 수천 줄이면 log aggregation 비용 폭발.
+
+### 발표 시 한 줄
+
+> "JwtFilter 의 catch 는 log 안 박았는데, 이게 버그가 아니라 의도적입니다. 모든 인증 요청을 거치는 high-volume path 라 log 박으면 봇 spam 만으로 분당 수천 라인 폭발해서 디스크 / grep 둘 다 망가집니다. 대신 운영 모니터링이 필요해지면 Micrometer 카운터로 옮기는 게 정답이라 docstring 에 그 권유까지 박아뒀습니다. 같은 silent catch 패턴이라도 path 의 volume 에 따라 fix 방향이 정반대 — 이게 T-033 sweep 의 핵심 교훈입니다."
+
+### 청중 Q&A 대비
+
+**Q. JwtFilter 가 침묵이면 공격자가 우리를 두드리는지 어떻게 알아요?**
+> 단일 요청은 모릅니다. 하지만 메트릭 카운터 도입 후엔 rate 가 보이고, 비정상 spike (평소 분당 10건 → 갑자기 5000건) 를 알람 룰로 잡을 수 있어요. 개별 라인 log 가 아니어도 패턴은 보입니다. 그리고 만약 정말 의심스러운 공격을 깊이 분석하고 싶으면, 그 시점에만 임시로 DEBUG 로그를 활성화하는 방법도 있고요.
+
+**Q. T-032 의 generic Exception 핸들러도 silent 였는데 왜 fix 했나요? 똑같지 않나요?**
+> 핵심은 **volume**. T-032 는 generic Exception 핸들러 — 우리 코드의 **버그** 가 발생한 분류 안 된 예외만 거기 떨어집니다. 분당 0~1건. log 박아도 floods 위험 0. 반면 가시성 0 은 운영 진단 불가능. JwtFilter 는 거꾸로 — log 박으면 floods, 침묵이어도 메트릭으로 가시성 확보 가능. **같은 모양 다른 trade-off** 라 fix 방향이 정반대입니다.
+
+**Q. 그럼 모든 catch 에 sweep 들어가서 fix 후보를 어떻게 판별하나요?**
+> 두 질문이면 됩니다 — (1) "이 catch 는 어느 volume 인가?" (저 / 중 / 고). (2) "가시성 0 이 운영 사고로 이어지는가?". 답에 따라 4가지 분기:
+> - 저 + 가시성 필요 → log 박음 (T-032 본인)
+> - 저 + 가시성 불필요 → 그대로 (이미 처리됨)
+> - 고 + 가시성 필요 → **메트릭 채널** + docstring 명시 (JwtFilter)
+> - 고 + 가시성 불필요 → 그대로 + docstring 만 (드문 케이스)
+>
+> 카테고리 식별이 sweep 의 1단계, fix 패턴 적용이 2단계.
+
+**Q. 로그와 메트릭 외에 다른 채널은 없나요?**
+> 있어요 — **분산 트레이싱 (OpenTelemetry / Zipkin)** 은 요청 단위로 span 을 만들어서 분기 / 지연 / 에러 다 추적. log 처럼 줄마다 풀어쓰지 않고 요청 라이프사이클 단위로 압축. high-volume 경로의 가끔 발생하는 latency spike 같은 거 잡을 때 적합. 졸업프로젝트 범위 초과지만, 운영 서비스 키우면 도입 후보.
+
+### 코드 위치
+- `src/main/java/hoseo/moodiary/security/JwtAuthenticationFilter.java` — high-volume 의도적 침묵의 정확한 예시. docstring 에 사유 + 메트릭 권유 명시.
+- `src/main/java/hoseo/moodiary/exception/GlobalExceptionHandler.java#handleException` — 저-volume + 가시성 필요 → `log.error` 박힌 fix (T-032).
+- `src/main/java/hoseo/moodiary/service/AiResponseService.java#triggerAsync` — async background 의 silent → `log.warn` 박힌 fix (T-033 sweep).
+
+### 관련 노트
+- [10번. Spring 비동기](#10-spring-비동기-enableasync--async--동기-블로킹-회피--db-상태머신--race-방지) — `@Async` 안의 catch 도 silent 후보. T-033 sweep 에서 fix.
+- [13번. OAuth2 Token-Exchange](#13-oauth2--token-exchange-패턴--audience-검증-confused-deputy--email_verified-위임의-한계) — HttpGoogleOAuth2Provider 의 cause chain 손실 (silent 의 다른 변종) 도 같은 sweep 에서 fix.
+
+---
+
 ## 🔄 누적 갱신
 
 이 문서는 **새로운 질문 / 학습이 생길 때마다 추가**된다. 본인이 모르는 걸 묻고 알게 된 모든 기술 개념을 한 곳에 누적.
@@ -1260,3 +1391,4 @@ public class HttpGoogleOAuth2Provider implements OAuth2Provider { ... }
 | 2026-05-28 | 12번 추가 — CORS (SOP / Preflight / allowlist vs 와일드카드). 발표 슬라이드 21번 "보안 — CORS" 정책의 배경 이해. 본인이 "CORS가 뭐야?" 발화로 트리거. |
 | 2026-05-28 | **10/11/12 → goospel.github.io 공개판 승격** — [spring-async-pattern](https://goospel.github.io/notes/backend/spring-async-pattern/) / [aws-ssm-outbound-polling](https://goospel.github.io/notes/ops/aws-ssm-outbound-polling/) / [cors-fundamentals](https://goospel.github.io/notes/backend/cors-fundamentals/). 4문 자격 통과 (일반화 가능 / 본인 이해 확립 / 같은 스택 누구나 만남 / 검색 키워드 유효) + release PR #66 직후 묶음 임계 (3개) 도달. 글로벌 CLAUDE.md PKM 파이프라인 첫 실 적용. 각 항목 헤더에 공개판 링크 박음. |
 | 2026-05-28 | 13번 추가 — OAuth2 Token-Exchange + audience 검증 (confused deputy) + email_verified 위임의 한계. PR 12-final (Google OAuth2 실어댑터) 작업 직후 — 발표 / Q&A 의 핵심 후보 ("이미 Google 검증한 토큰을 왜 또 검증?" / "id_token vs access_token 차이" / "왜 BE redirect 흐름 안 씀?"). 일반화 가능성 매우 높음 — 다음 묶음 임계 도달 시 goospel.github.io 승격 후보. |
+| 2026-05-29 | 14번 추가 — Silent catch 의 두 얼굴 (의도적 침묵 vs 운영 사고) + 메트릭 채널. T-033 sweep 직후 사용자의 "JwtFilter 의 의도적 침묵이 뭐냐" 발화로 트리거. **Volume × 가시성 trade-off 매트릭스** 라는 일반화 가능한 분류 박음. 발표 / Q&A 의 "로그 어떻게 관리?" / "관찰성 (observability) 어떻게?" / "보안 이벤트 추적?" 답할 토대. 일반화 가능성 매우 높음 — 다음 묶음 임계 도달 시 goospel.github.io 승격 후보. |
