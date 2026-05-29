@@ -25,9 +25,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -35,6 +37,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import org.mockito.ArgumentCaptor;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -137,6 +140,43 @@ class PostControllerTest {
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.message").value("요청 형식이 올바르지 않습니다."));
         }
+
+        @Test
+        @DisplayName("postDate 가 yyyy-MM-dd 로 들어오면 DTO 에 LocalDate 로 바인딩되어 서비스에 전달")
+        void create_withPostDate_propagatesToService() throws Exception {
+            UUID newId = UUID.randomUUID();
+            given(postService.create(eq(USER_ID), any(PostRequestDto.class))).willReturn(newId);
+
+            // ObjectMapper 자동 LocalDate 직렬화 회피 — body 직접 string 으로 박는다.
+            String body = "{\"title\":\"t\",\"content\":\"c\",\"postDate\":\"2025-12-25\"}";
+
+            mockMvc.perform(post("/post").with(asUser(USER_ID))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isCreated());
+
+            ArgumentCaptor<PostRequestDto> captor = ArgumentCaptor.forClass(PostRequestDto.class);
+            verify(postService).create(eq(USER_ID), captor.capture());
+            assertThat(captor.getValue().getPostDate()).isEqualTo(LocalDate.of(2025, 12, 25));
+        }
+
+        @Test
+        @DisplayName("postDate 누락 시 DTO 의 postDate 는 null — 폴백은 서비스 책임")
+        void create_withoutPostDate_serviceReceivesNull() throws Exception {
+            UUID newId = UUID.randomUUID();
+            given(postService.create(eq(USER_ID), any(PostRequestDto.class))).willReturn(newId);
+
+            String body = "{\"title\":\"t\",\"content\":\"c\"}";
+
+            mockMvc.perform(post("/post").with(asUser(USER_ID))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isCreated());
+
+            ArgumentCaptor<PostRequestDto> captor = ArgumentCaptor.forClass(PostRequestDto.class);
+            verify(postService).create(eq(USER_ID), captor.capture());
+            assertThat(captor.getValue().getPostDate()).isNull();
+        }
     }
 
     @Nested
@@ -176,16 +216,20 @@ class PostControllerTest {
     class FindOne {
 
         @Test
-        @DisplayName("본인 글이면 200과 본문 반환")
+        @DisplayName("본인 글이면 200과 본문 반환 + postDate 는 yyyy-MM-dd 포맷으로 직렬화")
         void ownedSuccess() throws Exception {
             UUID id = UUID.randomUUID();
             given(postService.getPost(USER_ID, id)).willReturn(
-                    PostResponseDto.builder().id(id).title("t").content("c").build());
+                    PostResponseDto.builder()
+                            .id(id).title("t").content("c")
+                            .postDate(LocalDate.of(2025, 12, 25))
+                            .build());
 
             mockMvc.perform(get("/post/{id}", id).with(asUser(USER_ID)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.id").value(id.toString()))
-                    .andExpect(jsonPath("$.title").value("t"));
+                    .andExpect(jsonPath("$.title").value("t"))
+                    .andExpect(jsonPath("$.postDate").value("2025-12-25"));
         }
 
         @Test

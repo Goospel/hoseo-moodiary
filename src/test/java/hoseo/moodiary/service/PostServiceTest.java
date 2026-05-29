@@ -14,11 +14,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Field;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -60,7 +62,12 @@ class PostServiceTest {
     }
 
     private static Post postWithId(UUID postId, UUID ownerId, String title, String content) {
-        Post post = Post.builder().title(title).content(content).user(userWithId(ownerId)).build();
+        Post post = Post.builder()
+                .title(title)
+                .content(content)
+                .postDate(LocalDate.now())
+                .user(userWithId(ownerId))
+                .build();
         setId(post, "id", postId);
         return post;
     }
@@ -106,6 +113,39 @@ class PostServiceTest {
                     PostRequestDto.builder().title("t").content("c").build());
 
             verify(aiResponseRepository).save(any(AiResponse.class));
+        }
+
+        @Test
+        @DisplayName("postDate 명시 시 그대로 엔티티에 들어간다 — 지나간 날짜 일기")
+        void postDateExplicit() {
+            UUID newPostId = UUID.randomUUID();
+            LocalDate yesterday = LocalDate.now().minusDays(1);
+            given(userRepository.getReferenceById(OWNER_ID)).willReturn(userWithId(OWNER_ID));
+            given(postRepository.save(any(Post.class)))
+                    .willReturn(postWithId(newPostId, OWNER_ID, "t", "c"));
+
+            postService.create(OWNER_ID,
+                    PostRequestDto.builder().title("t").content("c").postDate(yesterday).build());
+
+            ArgumentCaptor<Post> captor = ArgumentCaptor.forClass(Post.class);
+            verify(postRepository).save(captor.capture());
+            assertThat(captor.getValue().getPostDate()).isEqualTo(yesterday);
+        }
+
+        @Test
+        @DisplayName("postDate 누락 시 today 로 폴백 — 기본 동작 '오늘 일기'")
+        void postDateOmittedFallsBackToToday() {
+            UUID newPostId = UUID.randomUUID();
+            given(userRepository.getReferenceById(OWNER_ID)).willReturn(userWithId(OWNER_ID));
+            given(postRepository.save(any(Post.class)))
+                    .willReturn(postWithId(newPostId, OWNER_ID, "t", "c"));
+
+            postService.create(OWNER_ID,
+                    PostRequestDto.builder().title("t").content("c").build());
+
+            ArgumentCaptor<Post> captor = ArgumentCaptor.forClass(Post.class);
+            verify(postRepository).save(captor.capture());
+            assertThat(captor.getValue().getPostDate()).isEqualTo(LocalDate.now());
         }
     }
 
@@ -195,6 +235,34 @@ class PostServiceTest {
             assertThat(existing.getContent()).isEqualTo("newC");
             assertThat(result.getTitle()).isEqualTo("newT");
             verify(postRepository, never()).save(any(Post.class));
+        }
+
+        @Test
+        @DisplayName("postDate 명시 시 엔티티의 postDate 도 갱신된다 — 날짜 잘못 적었을 때 수정")
+        void postDateUpdated() {
+            UUID postId = UUID.randomUUID();
+            Post existing = postWithId(postId, OWNER_ID, "old", "old");
+            LocalDate twoDaysAgo = LocalDate.now().minusDays(2);
+            given(postRepository.findById(postId)).willReturn(Optional.of(existing));
+
+            PostResponseDto result = postService.update(OWNER_ID, postId,
+                    PostRequestDto.builder().title("newT").content("newC").postDate(twoDaysAgo).build());
+
+            assertThat(existing.getPostDate()).isEqualTo(twoDaysAgo);
+            assertThat(result.getPostDate()).isEqualTo(twoDaysAgo);
+        }
+
+        @Test
+        @DisplayName("postDate 누락 시 update 도 today 로 폴백 — create 와 일관")
+        void postDateOmittedFallsBackToToday() {
+            UUID postId = UUID.randomUUID();
+            Post existing = postWithId(postId, OWNER_ID, "old", "old");
+            given(postRepository.findById(postId)).willReturn(Optional.of(existing));
+
+            postService.update(OWNER_ID, postId,
+                    PostRequestDto.builder().title("newT").content("newC").build());
+
+            assertThat(existing.getPostDate()).isEqualTo(LocalDate.now());
         }
 
         @Test

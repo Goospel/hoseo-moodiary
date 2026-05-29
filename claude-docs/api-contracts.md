@@ -335,12 +335,14 @@ Content-Type: application/json
 ```json
 {
   "title": "오늘의 기분",
-  "content": "오늘은 기분이 좋았다."
+  "content": "오늘은 기분이 좋았다.",
+  "postDate": "2026-05-29"
 }
 ```
 
 - `title` (string, **required**, `@NotBlank`)
 - `content` (string, **required**, `@NotBlank`)
+- `postDate` (string `yyyy-MM-dd`, **optional**) — 일기 날짜 (entry date). "지나간 날짜의 일기" 작성 시 사용. 누락 시 서버가 오늘 (`LocalDate.now()`) 로 폴백. `createdAt` (작성 시점, 자동) 과 별개.
 
 **Response — 201 Created**
 ```
@@ -368,7 +370,8 @@ Authorization: Bearer <accessToken>
   {
     "id": "9c4d401e-63ba-413e-abbe-a6d5cf869f0e",
     "title": "오늘의 기분",
-    "content": "오늘은 기분이 좋았다."
+    "content": "오늘은 기분이 좋았다.",
+    "postDate": "2026-05-29"
   }
 ]
 ```
@@ -398,7 +401,8 @@ Authorization: Bearer <accessToken>
 {
   "id": "9c4d401e-63ba-413e-abbe-a6d5cf869f0e",
   "title": "오늘의 기분",
-  "content": "오늘은 기분이 좋았다."
+  "content": "오늘은 기분이 좋았다.",
+  "postDate": "2026-05-29"
 }
 ```
 
@@ -422,17 +426,19 @@ Content-Type: application/json
 ```json
 {
   "title": "수정된 제목",
-  "content": "수정된 본문"
+  "content": "수정된 본문",
+  "postDate": "2026-05-28"
 }
 ```
-- body는 `POST /post`와 동일한 `@NotBlank` 검증
+- body는 `POST /post`와 동일한 검증 + `postDate` 도 동일 시맨틱 (선택, 누락 시 오늘 폴백). 날짜 잘못 적었을 때 수정 가능.
 
 **Response — 200 OK**
 ```json
 {
   "id": "9c4d401e-63ba-413e-abbe-a6d5cf869f0e",
   "title": "수정된 제목",
-  "content": "수정된 본문"
+  "content": "수정된 본문",
+  "postDate": "2026-05-28"
 }
 ```
 > 📌 POST 와 달리 객체 반환 (UUID 문자열 아님).
