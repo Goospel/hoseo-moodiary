@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import hoseo.moodiary.entitiy.AuthProvider;
 import hoseo.moodiary.exception.OAuth2VerificationException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatusCode;
@@ -36,6 +37,7 @@ import org.springframework.web.client.RestClient;
  * <p><b>비밀 키 정책</b>: client_secret 은 사용하지 않는다 — tokeninfo 검증은 client_id 만 필요 (audience 비교용).
  * 운영에선 {@code GOOGLE_OAUTH_CLIENT_ID} env var 만 주입.
  */
+@Slf4j
 @Component
 @ConditionalOnProperty(name = "oauth2.client.mode", havingValue = "http")
 public class HttpGoogleOAuth2Provider implements OAuth2Provider {
@@ -84,7 +86,9 @@ public class HttpGoogleOAuth2Provider implements OAuth2Provider {
                     .body(GoogleTokenInfo.class);
         } catch (ResourceAccessException e) {
             // 네트워크 / DNS / connection refused 등 — provider 측 검증 실패로 통일.
-            throw new OAuth2VerificationException("Google tokeninfo 호출 실패: " + e.getMessage());
+            // T-033: 운영에서 Google 외부 통신 장애 추적 가능하도록 cause chain 보존 + log.warn.
+            log.warn("Google tokeninfo 호출 실패 — 네트워크/DNS/connection 문제로 OAuth2 가입 차단", e);
+            throw new OAuth2VerificationException("Google tokeninfo 호출 실패: " + e.getMessage(), e);
         }
 
         if (info == null) {

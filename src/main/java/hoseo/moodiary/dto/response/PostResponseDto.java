@@ -1,9 +1,11 @@
 package hoseo.moodiary.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Builder;
 import lombok.Getter;
 
+import java.time.LocalDate;
 import java.util.UUID;
 
 @Schema(description = "게시글 응답")
@@ -19,4 +21,8 @@ public class PostResponseDto {
 
     @Schema(description = "게시글 내용", example = "오늘은 기분이 좋았다.")
     private String content;
+
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
+    @Schema(description = "일기 날짜 (yyyy-MM-dd)", example = "2026-05-29")
+    private LocalDate postDate;
 }
