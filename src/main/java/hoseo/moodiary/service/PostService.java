@@ -1,14 +1,17 @@
 package hoseo.moodiary.service;
 
 import hoseo.moodiary.dto.request.PostRequestDto;
+import hoseo.moodiary.dto.request.PostSortField;
 import hoseo.moodiary.dto.response.PostResponseDto;
 import hoseo.moodiary.entitiy.AiResponse;
 import hoseo.moodiary.entitiy.Post;
 import hoseo.moodiary.entitiy.User;
+import hoseo.moodiary.exception.InvalidPostSearchException;
 import hoseo.moodiary.exception.PostAccessDeniedException;
 import hoseo.moodiary.exception.PostNotFoundException;
 import hoseo.moodiary.repository.AiResponseJpaRepository;
 import hoseo.moodiary.repository.PostJpaRepository;
+import hoseo.moodiary.repository.PostSearchRepository;
 import hoseo.moodiary.repository.UserJpaRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -37,9 +40,14 @@ import java.util.UUID;
 @Transactional
 public class PostService {
 
+    /** sort 파라미터 기본값 — postDate 내림차순 (최근 일기가 위로). */
+    private static final PostSortField DEFAULT_SORT_FIELD = PostSortField.POST_DATE;
+    private static final boolean DEFAULT_ASCENDING = false;
+
     private final PostJpaRepository postRepository;
     private final UserJpaRepository userRepository;
     private final AiResponseJpaRepository aiResponseRepository;
+    private final PostSearchRepository postSearchRepository;
 
     /**
      * 일기 + AI 응답 PENDING row 를 같은 트랜잭션에 저장. 이 메서드 return 후 컨트롤러가
@@ -56,11 +64,61 @@ public class PostService {
         return saved.getId();
     }
 
+    /**
+     * 본인 게시글 목록을 정렬 + 선택적 필터(날짜 범위 / 키워드)로 조회.
+     *
+     * @param from    postDate 하한 (inclusive, null 이면 무제한)
+     * @param to      postDate 상한 (inclusive, null 이면 무제한)
+     * @param keyword 제목/내용 부분일치 (null/blank 이면 무시)
+     * @param sort    {@code "필드,방향"} 형식 (예: {@code "postDate,desc"}). null/blank 이면 기본값(postDate desc).
+     *                필드는 화이트리스트({@link PostSortField})만, 방향은 asc/desc 만 허용 — 아니면 400.
+     */
     @Transactional(readOnly = true)
-    public List<PostResponseDto> getAllPosts(UUID currentUserId) {
-        return postRepository.findAllByUser_Id(currentUserId).stream()
+    public List<PostResponseDto> getAllPosts(UUID currentUserId,
+                                             LocalDate from,
+                                             LocalDate to,
+                                             String keyword,
+                                             String sort) {
+        validateRange(from, to);
+        SortSpec sortSpec = parseSort(sort);
+        return postSearchRepository
+                .search(currentUserId, from, to, keyword, sortSpec.field(), sortSpec.ascending())
+                .stream()
                 .map(this::toResponse)
                 .toList();
+    }
+
+    /** from > to 는 빈 결과를 줄 게 뻔한 사용자 실수 — 조용히 빈 배열 대신 400 으로 알려준다. */
+    private void validateRange(LocalDate from, LocalDate to) {
+        if (from != null && to != null && from.isAfter(to)) {
+            throw new InvalidPostSearchException(
+                    "조회 시작일(from)이 종료일(to)보다 늦습니다. from=" + from + ", to=" + to);
+        }
+    }
+
+    /** {@code "필드,방향"} 파싱. null/blank → 기본값. 화이트리스트/방향 위반 → 400. */
+    private SortSpec parseSort(String sort) {
+        if (sort == null || sort.isBlank()) {
+            return new SortSpec(DEFAULT_SORT_FIELD, DEFAULT_ASCENDING);
+        }
+        String[] parts = sort.split(",");
+        PostSortField field = PostSortField.from(parts[0].trim());
+        boolean ascending = parts.length >= 2 ? parseDirection(parts[1].trim()) : DEFAULT_ASCENDING;
+        return new SortSpec(field, ascending);
+    }
+
+    private boolean parseDirection(String direction) {
+        if ("asc".equalsIgnoreCase(direction)) {
+            return true;
+        }
+        if ("desc".equalsIgnoreCase(direction)) {
+            return false;
+        }
+        throw new InvalidPostSearchException(
+                "지원하지 않는 정렬 방향입니다: " + direction + " (가능: asc, desc)");
+    }
+
+    private record SortSpec(PostSortField field, boolean ascending) {
     }
 
     @Transactional(readOnly = true)
