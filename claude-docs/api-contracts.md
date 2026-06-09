@@ -342,8 +342,8 @@ Content-Type: application/json
 }
 ```
 
-- `title` (string, **required**, `@NotBlank`)
-- `content` (string, **required**, `@NotBlank`)
+- `title` (string, **required**, `@NotBlank`, 최대 255자)
+- `content` (string, **required**, `@NotBlank`, 최대 10000자) — DB 컬럼은 `TEXT`. 여러 줄(개행 포함) 본문 정상 저장. 길이 초과 시 400 (T-036).
 - `postDate` (string `yyyy-MM-dd`, **optional**) — 일기 날짜 (entry date). "지나간 날짜의 일기" 작성 시 사용. 누락 시 서버가 오늘 (`LocalDate.now()`) 로 폴백. `createdAt` (작성 시점, 자동) 과 별개.
 
 **Response — 201 Created**
@@ -353,7 +353,7 @@ Content-Type: application/json
 > ⚠️ 응답 바디는 **UUID 문자열 한 줄** (객체 아님).
 
 **에러**
-- `400` — `{"message": "제목은 필수입니다."}` / `{"message": "내용은 필수입니다."}` / `{"message": "요청 형식이 올바르지 않습니다."}`
+- `400` — `{"message": "제목은 필수입니다."}` / `{"message": "내용은 필수입니다."}` / `{"message": "제목은 255자를 넘을 수 없습니다."}` / `{"message": "내용은 10000자를 넘을 수 없습니다."}` / `{"message": "요청 형식이 올바르지 않습니다."}`
 - `401` — 인증 누락/실패
 
 ---

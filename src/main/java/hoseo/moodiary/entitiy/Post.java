@@ -24,7 +24,16 @@ public class Post extends BaseEntity {
     @Column(name = "post_title")
     private String title;
 
-    @Column(name = "post_content")
+    /**
+     * 일기 본문. {@code TEXT} 로 매핑 — length 미지정 시 JPA 기본값 {@code VARCHAR(255)} 라
+     * 255자를 넘는 (특히 여러 줄) 일기가 {@code Data too long for column} 으로 터져 500 으로 떨어지던
+     * 버그를 막는다 (T-036). 줄바꿈이 아니라 길이가 원인이었다.
+     *
+     * <p><b>⚠️ 운영 주의</b>: {@code ddl-auto: update} 는 <i>기존</i> 컬럼의 타입/길이를 ALTER 하지 않는다
+     * (컬럼/테이블 추가만). 이미 {@code VARCHAR(255)} 로 생성된 운영 DB 는 수동 DDL 필요:
+     * {@code ALTER TABLE post MODIFY COLUMN post_content TEXT;}
+     */
+    @Column(name = "post_content", columnDefinition = "TEXT")
     private String content;
 
     /**

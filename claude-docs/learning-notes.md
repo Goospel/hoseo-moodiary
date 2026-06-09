@@ -27,6 +27,7 @@
 13. [OAuth2 — Token-Exchange 패턴 + audience 검증 (confused deputy) + email_verified 위임의 한계](#13-oauth2--token-exchange-패턴--audience-검증-confused-deputy--email_verified-위임의-한계)
 14. [Silent catch 의 두 얼굴 — 의도적 침묵 (high-volume) vs 운영 사고 (저-volume) + 메트릭 채널](#14-silent-catch-의-두-얼굴--의도적-침묵-high-volume-vs-운영-사고-저-volume--메트릭-채널)
 15. [Mixed Content — HTTPS 페이지의 HTTP API 호출은 브라우저가 *요청 전에* 차단 (Vercel rewrites 가 빠른 해결책)](#15-mixed-content--https-페이지의-http-api-호출은-브라우저가-요청-전에-차단-vercel-rewrites-가-빠른-해결책)
+16. [JPA `String` 컬럼의 기본 `VARCHAR(255)` 함정 + `ddl-auto:update` 는 기존 컬럼을 안 넓힌다](#16-jpa-string-컬럼의-기본-varchar255-함정--ddl-autoupdate-는-기존-컬럼을-안-넓힌다)
 
 ---
 
@@ -1532,6 +1533,83 @@ A. 그 결정의 의도가 정확히 이걸 회피하려던 것. S3 정적 호�
 
 ---
 
+## 16. JPA `String` 컬럼의 기본 `VARCHAR(255)` 함정 + `ddl-auto:update` 는 기존 컬럼을 안 넓힌다
+
+### 한 줄 요약
+> JPA 에서 `String` 필드에 길이를 안 주면 컬럼이 **`VARCHAR(255)`** 로 매핑된다. 일기 본문처럼 길어질 수 있는 필드는 256자만 넘어도 `Data too long` 으로 INSERT 가 터지고, 매핑 핸들러가 없으면 **500** 으로 떨어진다. 게다가 `ddl-auto:update` 는 **기존 컬럼의 타입/길이를 바꾸지 않아서** 엔티티만 고쳐선 운영 DB 가 안 넓어진다 — 수동 `ALTER` 가 필요하다.
+
+### 어떻게 터졌나 (FE 버그 제보)
+
+```
+짧은 일기 → POST /post → 201 정상
+여러 줄(=긴) 일기 → POST /post → 500 {"message":"서버 오류가 발생했습니다."}
+```
+
+FE 는 "줄바꿈(\n) 처리 문제 아니냐" 고 의심했지만 **틀렸다**. `VARCHAR` 는 개행을 정상 저장한다. 진짜 원인은 **길이** — 여러 줄 일기가 길어서 255자를 넘긴 것. 짧은 글이 통과한 것이 단서.
+
+### 왜 255인가 — JPA/Hibernate 의 기본값
+
+```java
+@Column(name = "post_content")   // length 미지정
+private String content;          // → VARCHAR(255) 로 매핑됨
+```
+
+JPA 스펙상 `String` 의 기본 `length` 가 255. Hibernate 가 DDL 생성 시 `post_content VARCHAR(255)` 로 만든다. 256자가 들어오면:
+
+```
+H2:    Value too long for column "POST_CONTENT CHARACTER VARYING(255)": "...(485)"
+MySQL: Data too long for column 'post_content'
+→ DataIntegrityViolationException → 미핸들 → generic 500
+```
+
+### 본문성 필드 vs 짧은 필드
+
+| 필드 종류 | 적정 매핑 |
+|---|---|
+| 제목 / 닉네임 / 이메일 | `VARCHAR(n)` — 255 이하로 충분 (`@Column(length=...)`) |
+| **일기 본문 / 댓글 / 설명** | **`TEXT`** (`@Column(columnDefinition="TEXT")`) — 길이 가변 |
+
+→ 엔티티 만들 때 본문성 필드마다 *"최댓값이 255를 넘을 수 있나?"* 를 자문하는 습관.
+
+### 두 번째 함정 — `ddl-auto:update` 는 기존 컬럼을 안 바꾼다
+
+엔티티를 `TEXT` 로 고쳐도 **이미 `VARCHAR(255)` 로 생성된 운영 컬럼은 그대로**다. `update` 모드는 "누락된 컬럼·테이블 추가" 만 하고, 기존 컬럼의 타입/길이 변경·`NOT NULL` 추가·인덱스 생성은 보장하지 않는다 ([8번 노트](#8-ddl-auto-update-의-한계--운영-머지-후-unique-인덱스-사후-검증이-필요한-이유)와 같은 결). 그래서 운영엔 수동 DDL 이 필수:
+
+```sql
+ALTER TABLE post MODIFY COLUMN post_content TEXT;
+```
+
+### 해결 — 두 겹 방어
+
+1. **컬럼 확장**: `@Column(columnDefinition="TEXT")` — 긴 본문을 DB 가 받게.
+2. **입력 검증**: DTO 에 `@Size(max=N)` — 한도 초과는 binding 단계에서 `MethodArgumentNotValidException` → **400** 으로 거른다. DB 도달 전에 막아 거대 페이로드 방어 + 의미 있는 메시지. (DB 제약 위반 500 을 입력 검증 400 으로 한 겹 앞당기는 패턴 — [14번/T-034](#14-silent-catch-의-두-얼굴--의도적-침묵-high-volume-vs-운영-사고-저-volume--메트릭-채널)의 "binding 단계 예외는 `@ControllerAdvice` 로 400" 철학과 같음.)
+
+### 발표 / Q&A 한 줄
+> "일기 본문이 `@Column` 길이 미지정이라 JPA 기본값인 `VARCHAR(255)` 로 매핑돼서, 긴 일기가 `Data too long` 으로 500 이 났습니다. 컬럼을 `TEXT` 로 넓히고 `@Size` 로 입력 단계에서 400 으로 거르는 두 겹으로 고쳤고, `ddl-auto:update` 가 기존 컬럼을 안 바꾸기 때문에 운영엔 `ALTER TABLE … MODIFY … TEXT` 를 따로 적용했습니다."
+
+### 청중 Q&A 대비
+
+**Q. 왜 처음부터 TEXT 로 안 했나요?**
+> 엔티티 작성 시 `@Column` 에 length 를 의식적으로 지정하지 않으면 조용히 255가 적용된다. "기본값이 안전할 것" 이라는 가정이 함정. 본문성 필드는 명시적으로 TEXT 를 줘야 한다는 교훈.
+
+**Q. `@Size(max=10000)` 와 컬럼 `TEXT` 중 하나만 있으면 안 되나요?**
+> 역할이 다르다. `@Size` 없이 TEXT 만 있으면 64KB 까지 무방비로 받는다(거대 페이로드). TEXT 없이 `@Size` 만 있으면 컬럼이 여전히 255라 256~10000 구간이 DB 에서 터진다. 둘이 같이 있어야 "정상 범위는 저장, 비정상은 400" 이 완성.
+
+**Q. `@Lob` 을 쓰면 안 되나요?**
+> `@Lob` + `String` 은 MySQL 에서 `LONGTEXT`(4GB) 로 매핑되어 과하고, 일부 드라이버에서 스트리밍/인코딩 이슈가 있다. 일기 본문 정도는 `columnDefinition="TEXT"`(64KB) 가 명시적이고 충분.
+
+### 코드 위치 — 이 프로젝트
+- `src/main/java/hoseo/moodiary/entitiy/Post.java` — `content` 의 `columnDefinition="TEXT"` + 운영 ALTER 주석
+- `src/main/java/hoseo/moodiary/dto/request/PostRequestDto.java` — `@Size`(title 255 / content 10000)
+- `src/test/java/hoseo/moodiary/entitiy/PostContentLengthTest.java` — `@DataJpaTest` 600자 저장 회귀 테스트
+- [troubleshooting T-036](./troubleshooting.md#t-036) — 같은 함정의 trap 기록
+
+### 관련 노트
+- [8번. ddl-auto 의 한계](#8-ddl-auto-update-의-한계--운영-머지-후-unique-인덱스-사후-검증이-필요한-이유) — `update` 가 인덱스/제약을 보장 안 하는 것과 동일한 뿌리: "update 는 추가만, 변경은 안 함". 컬럼 타입 변경도 같은 한계.
+- [9번. utf8mb4](#9-utf8mb4-가-왜-중요한가--이모지-insert-폭발-시나리오) — 같은 "DB 컬럼 정의가 입력을 못 받아 INSERT 폭발 → 500" 계열의 함정 (charset vs length).
+
+---
+
 ## 🔄 누적 갱신
 
 이 문서는 **새로운 질문 / 학습이 생길 때마다 추가**된다. 본인이 모르는 걸 묻고 알게 된 모든 기술 개념을 한 곳에 누적.
@@ -1548,3 +1626,4 @@ A. 그 결정의 의도가 정확히 이걸 회피하려던 것. S3 정적 호�
 | 2026-05-28 | 13번 추가 — OAuth2 Token-Exchange + audience 검증 (confused deputy) + email_verified 위임의 한계. PR 12-final (Google OAuth2 실어댑터) 작업 직후 — 발표 / Q&A 의 핵심 후보 ("이미 Google 검증한 토큰을 왜 또 검증?" / "id_token vs access_token 차이" / "왜 BE redirect 흐름 안 씀?"). 일반화 가능성 매우 높음 — 다음 묶음 임계 도달 시 goospel.github.io 승격 후보. |
 | 2026-05-29 | 14번 추가 — Silent catch 의 두 얼굴 (의도적 침묵 vs 운영 사고) + 메트릭 채널. T-033 sweep 직후 사용자의 "JwtFilter 의 의도적 침묵이 뭐냐" 발화로 트리거. **Volume × 가시성 trade-off 매트릭스** 라는 일반화 가능한 분류 박음. 발표 / Q&A 의 "로그 어떻게 관리?" / "관찰성 (observability) 어떻게?" / "보안 이벤트 추적?" 답할 토대. 일반화 가능성 매우 높음 — 다음 묶음 임계 도달 시 goospel.github.io 승격 후보. |
 | 2026-05-29 | 15번 추가 — Mixed Content (HTTPS 페이지의 HTTP API 호출을 브라우저가 *요청 전에* 차단) + FE reverse-proxy (Vercel rewrites) 패턴. FE 가 S3 대신 Vercel 배포 시도하면서 자동 HTTPS ↔ EC2 HTTP 충돌로 발견. **EC2 로그에 0줄** 이 결정적 진단 단서. plan.md 의 "프론트 = S3 only" 결정이 의존하던 가정 (S3 = HTTP) 이 Vercel 자동 HTTPS 와 충돌해 깨짐 — "결정 + 의존 가정" 명시 일반 교훈도 박음. 일반화 가능성 매우 높음 (Vercel/Netlify/Cloudflare Pages 어디서나 같은 패턴) — **13 + 14 + 15 = 3개 묶음 임계 도달, 다음 release 직후 goospel.github.io 승격 후보**. |
+| 2026-06-09 | 16번 추가 — JPA `String` 컬럼 기본 `VARCHAR(255)` 함정 + `ddl-auto:update` 가 기존 컬럼 타입을 안 바꿈. FE 의 "여러 줄 일기 저장 500" 버그 제보를 `@DataJpaTest` 로 재현해 길이 초과(줄바꿈 무관)로 확정. `TEXT` 확장 + `@Size` 두 겹 방어 + 운영 수동 ALTER. [T-036](./troubleshooting.md#t-036). 일반화 가능성 높음 (JPA/Hibernate 쓰는 모든 프로젝트의 본문성 필드 공통 함정) — **다음 묶음(16+...)으로 goospel.github.io 승격 후보**. |
