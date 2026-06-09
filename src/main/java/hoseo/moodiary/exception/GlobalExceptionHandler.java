@@ -10,6 +10,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @Slf4j
 @RestControllerAdvice
@@ -81,6 +82,31 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponseDto> handleCalendarInvalidRange(CalendarInvalidRangeException e) {
         return ResponseEntity.badRequest()
                 .body(ErrorResponseDto.builder().message(e.getMessage()).build());
+    }
+
+    /**
+     * 게시글 목록 조회의 검색/정렬 파라미터 오류 — 400. (잘못된 정렬 필드/방향, 날짜 범위 역전)
+     */
+    @ExceptionHandler(InvalidPostSearchException.class)
+    public ResponseEntity<ErrorResponseDto> handleInvalidPostSearch(InvalidPostSearchException e) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponseDto.builder().message(e.getMessage()).build());
+    }
+
+    /**
+     * 쿼리/path 파라미터 타입 변환 실패 — 400.
+     *
+     * <p>예: {@code GET /post?from=abc} 처럼 LocalDate 로 못 바꾸는 값, 또는 {@code @PathVariable UUID}
+     * 자리에 UUID 형식 아닌 값. 이 핸들러가 없으면 fallback {@code Exception} 핸들러가 잡아 500 으로
+     * 떨어진다 — 사용자 입력 실수인데 서버 오류로 보이는 함정 (T-031/T-032 와 같은 부류). 명시적으로
+     * 400 매핑해 "입력이 잘못됐다" 를 알려준다.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponseDto> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponseDto.builder()
+                        .message("파라미터 형식이 올바르지 않습니다: " + e.getName())
+                        .build());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

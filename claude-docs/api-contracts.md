@@ -54,7 +54,7 @@
 | 토큰 갱신 | `POST` | `/auth/refresh` | ❌ 불필요 | ✅ JSON | `200` `{ accessToken, refreshToken }` (rotation) |
 | 로그아웃 | `POST` | `/auth/logout` | ❌ 불필요 | ✅ JSON | `204` (바디 없음) |
 | 게시글 작성 | `POST` | `/post` | ✅ 필수 | ✅ JSON | `201` UUID 문자열 |
-| 내 게시글 전체 조회 | `GET` | `/post` | ✅ 필수 | ❌ | `200` `PostResponseDto[]` |
+| 내 게시글 전체 조회 | `GET` | `/post` | ✅ 필수 | `from`/`to`/`keyword`/`sort` (전부 선택) | `200` `PostResponseDto[]` / `400` 잘못된 정렬·범위·형식 |
 | 게시글 단건 조회 | `GET` | `/post/{id}` | ✅ 필수 | ❌ | `200` `PostResponseDto` |
 | 게시글 수정 | `PUT` | `/post/{id}` | ✅ 필수 | ✅ JSON | `200` `PostResponseDto` |
 | 게시글 삭제 | `DELETE` | `/post/{id}` | ✅ 필수 | ❌ | `204` (바디 없음) |
@@ -359,12 +359,23 @@ Content-Type: application/json
 ---
 
 #### `GET /post`
-**내** 게시글 전체 조회. 다른 사용자의 글은 절대 포함 안 됨.
+**내** 게시글 전체 조회. 다른 사용자의 글은 절대 포함 안 됨. 정렬(기본 일기날짜 최신순) + 선택적 필터 지원.
 
 **Headers**
 ```
 Authorization: Bearer <accessToken>
 ```
+
+**Query Parameters** (전부 선택)
+
+| 파라미터 | 타입 | 기본값 | 설명 |
+|---|---|---|---|
+| `from` | `LocalDate` (yyyy-MM-dd) | 없음 | 일기 날짜(postDate) 하한 (inclusive). 한쪽만 줘도 됨. |
+| `to` | `LocalDate` (yyyy-MM-dd) | 없음 | 일기 날짜(postDate) 상한 (inclusive). |
+| `keyword` | `String` | 없음 | 제목/내용 부분일치 (대소문자 무시). |
+| `sort` | `String` | `postDate,desc` | `필드,방향` 형식. 필드: `postDate`/`createdAt`, 방향: `asc`/`desc`. |
+
+예: `GET /post?from=2026-05-01&to=2026-05-31&keyword=여행&sort=postDate,desc`
 
 **Response — 200 OK**
 ```json
@@ -378,12 +389,14 @@ Authorization: Bearer <accessToken>
 ]
 ```
 
-빈 결과면 `[]`.
+빈 결과면 `[]`. 같은 `postDate` 가 여러 건이면 `createdAt` 내림차순 → `id` 오름차순으로 안정 정렬(tiebreaker).
 
 **에러**
+- `400` — 잘못된 정렬 필드/방향 (`sort=content,desc` 등), 날짜 범위 역전 (`from` > `to`), 또는 날짜 형식 오류 (`from=abc`)
 - `401` — 인증 누락/실패
 
-> 📌 페이지네이션 없음 (TODO).
+> 📌 페이지네이션 없음 (TODO — 도입 시 응답이 `Page<>` wrapper 로 바뀌는 breaking change라 FE 계약 합의 필요).
+> 📌 **인덱스 권장**: `post(user_id, post_date)` 복합 인덱스. 기본 정렬이 postDate 라 user_id 필터 + postDate 정렬을 한 인덱스로 처리. `ddl-auto: update` 는 인덱스를 보장하지 않으므로 운영 트래픽 증가 시 수동 DDL 필요.
 
 ---
 
@@ -647,3 +660,4 @@ Content-Type: application/json
 | 2026-05-25 | PR 5 Calendar API 진행 중. `GET /calendar?year=YYYY&month=MM` 구현 — `emoji` 는 PR 4 머지 전까지 항상 null 임시 처리. 공통 규약에 `MissingServletRequestParameterException` 400 매핑 명시. |
 | 2026-05-26 | FE 공유용 정비. **엔드포인트 요약 표** 추가 (URL/Method/인증 헤더/Body/응답 한눈에). Auth (`/auth/signup`, `/auth/login`) 와 Calendar (`/calendar`) 를 "예정" → "구현된 API" 로 이동. Post CRUD 에 실제 구현된 인증 헤더 (`Authorization: Bearer`) + 소유권 401/403 매핑 반영. 회원가입 비밀번호 정책 (`^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$`) 명시. 로그인 응답에 `userId` 포함 명시. `409` (이메일/닉네임 중복) 에러 코드 추가. 공통 헤더 섹션 신설. |
 | 2026-05-27 | PR 4-pre 머지. `GET /post/{id}/ai-response` 를 "예정 API" → "구현된 API (🚧 Stub 모드)" 로 이동. Stub 박스 + errorMessage 분기 정책 (`@JsonInclude(NON_NULL)`, FAILED 만 포함) 명시. 엔드포인트 요약 표에 "🚧 Stub" 표시. 외부 시스템 계약 섹션 헤더 "PR 4" → "PR 4-final" 로 명확화. `POST /post` 가 일기 + `AiResponse(PENDING)` 같은 트랜잭션 저장 후 비동기 트리거하는 흐름 추가. |
+| 2026-06-09 | `GET /post` 정렬/필터 추가. Query Parameters 표 (`from`/`to`/`keyword`/`sort`, 전부 선택) + 기본 `postDate,desc` + 안정 tiebreaker(`createdAt desc → id asc`) 명시. `400` 에러 (잘못된 정렬·범위 역전·날짜 형식) 추가. 엔드포인트 요약 표 Body 칸 갱신. 인덱스 권장 (`post(user_id, post_date)`) 노트. 페이지네이션은 여전히 TODO (도입 시 `Page<>` breaking change). |

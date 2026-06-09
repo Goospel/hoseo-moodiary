@@ -7,6 +7,7 @@ import hoseo.moodiary.dto.response.AiResponseDto;
 import hoseo.moodiary.dto.response.PostResponseDto;
 import hoseo.moodiary.entitiy.AiResponseStatus;
 import hoseo.moodiary.exception.AiResponseNotFoundException;
+import hoseo.moodiary.exception.InvalidPostSearchException;
 import hoseo.moodiary.exception.PostAccessDeniedException;
 import hoseo.moodiary.exception.PostNotFoundException;
 import hoseo.moodiary.security.JwtTokenProvider;
@@ -180,25 +181,28 @@ class PostControllerTest {
     }
 
     @Nested
-    @DisplayName("GET /post — 내 게시글 전체 조회")
+    @DisplayName("GET /post — 내 게시글 목록 (정렬 + 필터)")
     class FindAll {
 
         @Test
-        @DisplayName("본인 글이 없으면 200과 빈 배열")
+        @DisplayName("파라미터 없으면 200과 빈 배열 + 기본 sort 'postDate,desc' 로 서비스 호출")
         void empty() throws Exception {
-            given(postService.getAllPosts(USER_ID)).willReturn(List.of());
+            given(postService.getAllPosts(eq(USER_ID), any(), any(), any(), any())).willReturn(List.of());
 
             mockMvc.perform(get("/post").with(asUser(USER_ID)))
                     .andExpect(status().isOk())
                     .andExpect(content().json("[]"));
+
+            // 쿼리 파라미터 미지정 시 from/to/keyword 는 null, sort 는 defaultValue.
+            verify(postService).getAllPosts(USER_ID, null, null, null, "postDate,desc");
         }
 
         @Test
-        @DisplayName("본인 글이 여러 개면 200과 항목 전부")
+        @DisplayName("항목이 여러 개면 200과 전부 반환")
         void withItems() throws Exception {
             UUID id1 = UUID.randomUUID();
             UUID id2 = UUID.randomUUID();
-            given(postService.getAllPosts(USER_ID)).willReturn(List.of(
+            given(postService.getAllPosts(eq(USER_ID), any(), any(), any(), any())).willReturn(List.of(
                     PostResponseDto.builder().id(id1).title("t1").content("c1").build(),
                     PostResponseDto.builder().id(id2).title("t2").content("c2").build()
             ));
@@ -208,6 +212,45 @@ class PostControllerTest {
                     .andExpect(jsonPath("$.length()").value(2))
                     .andExpect(jsonPath("$[0].id").value(id1.toString()))
                     .andExpect(jsonPath("$[1].title").value("t2"));
+        }
+
+        @Test
+        @DisplayName("from/to/keyword/sort 쿼리 파라미터가 바인딩되어 서비스에 전달된다")
+        void passesQueryParams() throws Exception {
+            given(postService.getAllPosts(eq(USER_ID), any(), any(), any(), any())).willReturn(List.of());
+
+            mockMvc.perform(get("/post")
+                            .param("from", "2026-05-01")
+                            .param("to", "2026-05-31")
+                            .param("keyword", "여행")
+                            .param("sort", "createdAt,asc")
+                            .with(asUser(USER_ID)))
+                    .andExpect(status().isOk());
+
+            verify(postService).getAllPosts(USER_ID,
+                    LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31), "여행", "createdAt,asc");
+        }
+
+        @Test
+        @DisplayName("서비스가 InvalidPostSearchException 던지면 400 + 메시지")
+        void invalidSort_returns400() throws Exception {
+            given(postService.getAllPosts(eq(USER_ID), any(), any(), any(), any()))
+                    .willThrow(new InvalidPostSearchException("지원하지 않는 정렬 기준입니다: content (가능: postDate, createdAt)"));
+
+            mockMvc.perform(get("/post").param("sort", "content,desc").with(asUser(USER_ID)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message")
+                            .value("지원하지 않는 정렬 기준입니다: content (가능: postDate, createdAt)"));
+        }
+
+        @Test
+        @DisplayName("from 이 날짜로 파싱 불가하면 400 (타입 미스매치 → 500 함정 차단), 서비스 미호출")
+        void malformedDate_returns400() throws Exception {
+            mockMvc.perform(get("/post").param("from", "not-a-date").with(asUser(USER_ID)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("파라미터 형식이 올바르지 않습니다: from"));
+
+            verify(postService, never()).getAllPosts(any(), any(), any(), any(), any());
         }
     }
 
@@ -462,7 +505,7 @@ class PostControllerTest {
                     .andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.message").value("인증이 필요합니다."));
 
-            verify(postService, never()).getAllPosts(any());
+            verify(postService, never()).getAllPosts(any(), any(), any(), any(), any());
         }
 
         @Test

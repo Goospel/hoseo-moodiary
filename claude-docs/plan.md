@@ -1,7 +1,7 @@
 # Moodiary Backend — Roadmap
 
 > 백엔드 작업의 **현재 위치 + 다음 경로**. PR 머지 시 갱신.
-> 마지막 갱신: 2026-05-29 (Post.postDate 필드 추가 — "지나간 날짜의 일기" 시나리오 지원. RDS 사전 ALTER 필요.)
+> 마지막 갱신: 2026-06-09 (GET /post 정렬/필터 추가 — QueryDSL 동적 쿼리, 기본 postDate desc, from/to/keyword 선택 필터. 페이징은 분리. post(user_id, post_date) 인덱스 권장.)
 >
 > 📚 **상세는 다른 문서로 위임**:
 > - [`api-contracts.md`](./api-contracts.md) — API 명세 (request/response/예시/외부 AI 계약)
@@ -153,6 +153,8 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 | Path enum case-insensitive 정규화 (#80 T-031 fix) | Spring 기본 `String→Enum` 변환은 case-sensitive. `@PathVariable AuthProvider provider` 가 소문자 `google` path 변환 실패 → `MethodArgumentTypeMismatchException` → generic 500. Swagger 의 "대소문자 무관" promise 와 어긋남. **fix**: controller 가 `String` 으로 받아 `.toUpperCase()` 명시 정규화 + 미지원 값은 `InvalidOAuth2ProviderException` (400). 같은 패턴은 다른 enum path 도입 시 재사용. |
 | GlobalExceptionHandler 의 generic `Exception` 에 ERROR 로깅 (#80 T-032 fix) | `@ExceptionHandler` 가 catch 하면 Spring default exception logging 발동 안 함. 무로깅 silent 500 은 운영 진단 0. 응답 body 는 그대로 (사용자 노출 정보 변경 없음), `log.error("...", e)` 로 stdout 만 풍부. 향후 silent 500 후보 발견의 1차 단서. |
 | Squash release 후 dev → main merge 충돌의 표준 해결 (#79, #81) | main 의 release squash commit 이 dev 의 개별 commit 과 같은 줄 건드려 자동 머지 불가. dev 가 strict semantic superset 임을 명시 검증 후 `git merge origin/main -X ours` 로 자동 해결. 이 sweep 후 push 하면 release PR 이 자동 mergeable. **사용자 OK 필수** — auto classifier 가 처음엔 차단했던 패턴. |
+| `GET /post` 정렬/필터 = QueryDSL 동적 쿼리 (레벨 B, 페이징 분리) | 목록 조회에 정렬(기본 postDate desc) + 선택적 from/to/keyword. 조합이 선택적이라 파생 쿼리로는 메서드 폭발 → `BooleanBuilder` 로 null 조건만 skip 하는 단일 메서드 (`PostSearchRepository`, `CalendarRepository` 와 같은 QueryDSL 패턴). 정렬 필드는 화이트리스트 enum (`PostSortField`) — 임의 컬럼 정렬 차단. **페이징(`Page<>`)은 분리** — 응답 모양이 바뀌는 breaking change라 FE 계약 합의가 선행돼야 함. 잘못된 정렬/방향/범위는 `InvalidPostSearchException`(400). |
+| 쿼리 파라미터 타입 변환 실패 글로벌 400 매핑 ([T-034](./troubleshooting.md#t-034)) | `@RequestParam LocalDate` 변환 실패(`?from=abc`)가 핸들러 공백으로 generic 500 → `@ExceptionHandler(MethodArgumentTypeMismatchException)` 로 400. T-031(path enum)이 controller `.toUpperCase()` 국소 우회였을 뿐 핸들러 공백을 안 닫은 게 재노출된 것 — 이번엔 카테고리째 봉합 (path enum / 쿼리 날짜 / `@PathVariable UUID` 전부 커버). |
 
 ---
 
@@ -160,6 +162,7 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 
 | 일자 | 변경 |
 |---|---|
+| 2026-06-09 | **`GET /post` 정렬/필터 추가 (레벨 B)** — 정렬(기본 `postDate,desc`) + 선택적 `from`/`to`(postDate 범위) + `keyword`(제목/내용 부분일치). QueryDSL `PostSearchRepository` 신설 (`BooleanBuilder` 동적 조건), 정렬 화이트리스트 `PostSortField` enum, `InvalidPostSearchException`(400). 부수: `MethodArgumentTypeMismatchException` 글로벌 400 핸들러 ([T-034](./troubleshooting.md#t-034)) — 잘못된 날짜 형식 500 함정 봉합. dead code `findAllByUser_Id` 제거. **페이징은 분리** (TODO, `Page<>` breaking change). **인덱스 권장**: `post(user_id, post_date)` — `ddl-auto` 가 인덱스 미보장이라 운영 트래픽 증가 시 수동 DDL (PR body 명시). |
 | 2026-05-29 | **Post 에 `postDate` (LocalDate) 추가** — 사용자가 "지나간 날짜에 대한 일기" 작성 시 명시. 누락 시 서버가 `LocalDate.now()` 로 폴백 (기본 = "오늘 일기"). `createdAt` (자동) 과 별개. Request/Response DTO 모두 yyyy-MM-dd 포맷. update 시 변경 가능. `api-contracts.md` 의 Post 엔드포인트 4개 + 의사결정 로그 갱신. **운영 머지 전 RDS ALTER 필수** (`ddl-auto: update` 가 NOT NULL 추가 못 함 — T-019 교훈 5번). |
 | 2026-05-29 | **release PR #81 — T-031/T-032 hot-fix 운영 반영** — release PR #79 의 deploy 직후 발견된 함정 2건 (path enum case-sensitivity / silent 500 진단 가림막) 의 fix #80 을 main 으로. dev → main merge 충돌은 `-X ours` 패턴으로 자동 해결 (의사결정 로그 참조). 운영 검증: `/auth/oauth2/google` (소문자) → 401 정상 / `/auth/oauth2/twitter` → 400 정상. |
 | 2026-05-29 | **fix PR #80 — OAuth2 path case-insensitive + GlobalExceptionHandler 진단 로깅** — release #79 직후 발견한 두 함정 같이. controller 가 `String` 으로 받아 `.toUpperCase()` 정규화 + 신규 `InvalidOAuth2ProviderException` (400). `@Slf4j` + `log.error` 추가. 테스트 5 케이스 추가 (소/대/혼합 case + 미지원 + LOCAL service-level reject). troubleshooting [T-031](./troubleshooting.md#t-031) / [T-032](./troubleshooting.md#t-032). |
