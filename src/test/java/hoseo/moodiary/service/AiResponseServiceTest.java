@@ -90,7 +90,7 @@ class AiResponseServiceTest {
             Post post = postWithId(postId, OWNER_ID, "title", "content");
             AiResponse pending = pendingFor(post);
             given(aiResponseRepository.findByPost_Id(postId)).willReturn(Optional.of(pending));
-            given(client.invoke(postId, "title", "content"))
+            given(client.invoke(OWNER_ID, postId, "title", "content"))
                     .willReturn(new AiInferenceResult("AI 응답 본문", "😊"));
 
             aiResponseService.triggerAsync(postId);
@@ -109,7 +109,7 @@ class AiResponseServiceTest {
             AiResponse pending = pendingFor(post);
             given(aiResponseRepository.findByPost_Id(postId)).willReturn(Optional.of(pending));
             willThrow(new AiInferenceException("AI 서버 응답 시간 초과"))
-                    .given(client).invoke(postId, "title", "content");
+                    .given(client).invoke(OWNER_ID, postId, "title", "content");
 
             aiResponseService.triggerAsync(postId);
 

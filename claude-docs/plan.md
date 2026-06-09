@@ -1,7 +1,7 @@
 # Moodiary Backend — Roadmap
 
 > 백엔드 작업의 **현재 위치 + 다음 경로**. PR 머지 시 갱신.
-> 마지막 갱신: 2026-06-09 (GET /post 정렬/필터 추가 — QueryDSL 동적 쿼리, 기본 postDate desc, from/to/keyword 선택 필터. 페이징은 분리. post(user_id, post_date) 인덱스 권장.)
+> 마지막 갱신: 2026-06-09 (AI 서버 HTTP 어댑터 PR 4-final — ai.client.mode 토글, {userId,postId,title,content}→{message,emoji} 잠정 계약, 운영 stub 유지. 그 전: GET /post 정렬/필터.)
 >
 > 📚 **상세는 다른 문서로 위임**:
 > - [`api-contracts.md`](./api-contracts.md) — API 명세 (request/response/예시/외부 AI 계약)
@@ -20,8 +20,8 @@
 | **운영 URL** | http://15.165.95.129:8080 (Elastic IP, 고정) |
 | **운영 반영** | Post CRUD + 인증 (회원가입 / JWT 로그인 / Refresh Token rotation / **Google OAuth2 소셜 로그인**) + 소유권 + PR 4-pre 비동기 AI 골격 (Stub) + **MkDocs 문서 사이트 (`/docs/`)** |
 | **dev 에만** | Calendar API (emoji=null 임시) |
-| **외부 대기** | PR 4-final (AI 합의), PR 8 후반 (FE S3 endpoint 회신) |
-| **다음 핵심 경로** | PR 8 (가시성, FE 회신 대기) ‖ PR 4-final (AI 합의 대기) → PR 5 후속 (emoji JOIN) → PR 6 (Flyway baseline) |
+| **외부 대기** | PR 4-final 활성화 (AI 서버 배포 + URL/필드명 확정 — 어댑터는 구현 완료), PR 8 후반 (FE S3 endpoint 회신) |
+| **다음 핵심 경로** | PR 8 (가시성, FE 회신 대기) ‖ PR 4-final 활성화 (AI 서버 대기) → PR 5 후속 (emoji JOIN) → PR 6 (Flyway baseline) |
 | **스택** | Java 25 / Spring Boot 4.0.6 / EC2 + RDS MySQL 9 |
 
 ---
@@ -50,7 +50,7 @@
 
 | PR | 상태 | 대기 사유 |
 |---|---|---|
-| **PR 4-final** — AI HTTP 어댑터 + Retry + WireMock | ⏸ 0% | AI 담당자 외부 합의 ([api-contracts.md#합의-항목-체크리스트](./api-contracts.md#합의-항목-체크리스트)) |
+| **PR 4-final** — AI HTTP 어댑터 + WireMock | 🟢 어댑터 구현됨 (토글 뒤) | 코드/테스트 완료(`ai.client.mode=http`). **활성화 대기** = AI 서버 배포 + URL/필드명/인증 확정 ([api-contracts.md#합의-항목-체크리스트](./api-contracts.md#합의-항목-체크리스트)). 운영 기본값 stub. |
 | **PR 5** — Calendar API (`GET /calendar?year=YYYY&month=MM`) | 🟡 85% | dev 머지 완료. emoji LEFT JOIN + `(user_id, created_at)` 인덱스는 PR 4-final 후 후속 PR |
 | **PR 8 후반** — 프론트 S3 배포 + 통합 검증 | 🟡 50% | BE CORS ✅. FE 가 [`ops-runbooks/frontend-s3-cd-setup.md`](./ops-runbooks/frontend-s3-cd-setup.md) 따라 셋업 + S3 endpoint URL 회신 대기. **OAuth2 통합** 도 같이 검증 가능해짐 (PR 12 풀체인 운영 안착). |
 
@@ -72,11 +72,10 @@ PR 7 (ECS 이전)           ── 먼 미래, HTTPS/도메인 도입 시
 > 각 PR 의 **구현 체크리스트 / 위험 / 운영 머지 전 필수 항목**은 해당 PR 시작 시점에 PR body 에 작성한다.
 > plan.md 는 "무엇 / 왜 / 의존" 까지만.
 
-### PR 4-final — AI 비동기 응답 실어댑터 🤖 ⭐⭐⭐
-**Why**: PR 4-pre 의 Stub 을 실제 HTTP 호출로 교체. 일기 → AI 응답 + 기분 이모지 생성.
-**Why now blocked**: AI 담당자와 응답 포맷 / endpoint / API key 합의 필요.
-**범위**: `AiResponseClient` interface 추출 + `HttpAiResponseClient` (`RestClient`) + Spring Retry (5xx 만 N회) + WireMock 통합 테스트 + `ai.client.mode` 토글 + EC2 `.env` 에 `AI_*` env 추가.
-**의존**: PR 4-pre ✅, AI 합의.
+### PR 4-final — AI 비동기 응답 실어댑터 🤖 ⭐⭐⭐ — **어댑터 구현됨 (토글 뒤), 활성화 대기**
+**완료**: `AiResponseClient` interface 추출 + `StubAiResponseClient`/`HttpAiResponseClient`(`RestClient`) + `ai.client.mode` 토글 + WireMock 7케이스. 요청 `{userId,postId,title,content}` → 응답 `{message,emoji}`. 실패는 상위 `RestClientException` 으로 catch (T-035).
+**활성화 남은 일** (AI 서버 실체화 시): ① `AI_SERVER_URL`/필드명 확정 ② 인증 합의 시 헤더 추가 ③ EC2 `.env` + GitHub Secrets 에 `AI_CLIENT_MODE=http` + `AI_SERVER_URL`(+인증) 주입 ④ Retry(5xx) 도입 여부 결정.
+**의존**: PR 4-pre ✅. **잠정 계약** — AI 서버 미배포라 운영은 stub 유지.
 
 ### PR 5 후속 — Calendar emoji JOIN 📅 ⭐⭐
 **Why**: PR 5 가 emoji=null 로 우회됐던 거 채움. `AiResponse` LEFT JOIN 으로 일자별 이모지 매핑.
@@ -155,6 +154,8 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 | Squash release 후 dev → main merge 충돌의 표준 해결 (#79, #81) | main 의 release squash commit 이 dev 의 개별 commit 과 같은 줄 건드려 자동 머지 불가. dev 가 strict semantic superset 임을 명시 검증 후 `git merge origin/main -X ours` 로 자동 해결. 이 sweep 후 push 하면 release PR 이 자동 mergeable. **사용자 OK 필수** — auto classifier 가 처음엔 차단했던 패턴. |
 | `GET /post` 정렬/필터 = QueryDSL 동적 쿼리 (레벨 B, 페이징 분리) | 목록 조회에 정렬(기본 postDate desc) + 선택적 from/to/keyword. 조합이 선택적이라 파생 쿼리로는 메서드 폭발 → `BooleanBuilder` 로 null 조건만 skip 하는 단일 메서드 (`PostSearchRepository`, `CalendarRepository` 와 같은 QueryDSL 패턴). 정렬 필드는 화이트리스트 enum (`PostSortField`) — 임의 컬럼 정렬 차단. **페이징(`Page<>`)은 분리** — 응답 모양이 바뀌는 breaking change라 FE 계약 합의가 선행돼야 함. 잘못된 정렬/방향/범위는 `InvalidPostSearchException`(400). |
 | 쿼리 파라미터 타입 변환 실패 글로벌 400 매핑 ([T-034](./troubleshooting.md#t-034)) | `@RequestParam LocalDate` 변환 실패(`?from=abc`)가 핸들러 공백으로 generic 500 → `@ExceptionHandler(MethodArgumentTypeMismatchException)` 로 400. T-031(path enum)이 controller `.toUpperCase()` 국소 우회였을 뿐 핸들러 공백을 안 닫은 게 재노출된 것 — 이번엔 카테고리째 봉합 (path enum / 쿼리 날짜 / `@PathVariable UUID` 전부 커버). |
+| AI 서버 어댑터 = 토글 뒤 실구현 (PR 4-final, OAuth2 패턴 재사용) | `AiResponseClient` 인터페이스 + `StubAiResponseClient`(기본) / `HttpAiResponseClient`(`ai.client.mode=http`). AI 서버가 아직 미배포 + 형태 미확정이라 **우리 측 잠정 계약**으로 먼저 구현하고 토글 뒤에 둠 — 운영은 stub default라 안 깨지고, AI 서버 실체화 시 URL/필드명/인증만 맞추면 됨. 요청 `{userId, postId, title, content}` → 응답 `{message, emoji}`(message→content 매핑). **인증 보류**(헤더 없음). 외부 의존성 분리 = 차단 해소 1번 도구(PR 4-pre / 12-pre 와 동일). |
+| AI 어댑터 실패 = 성공 외 전부 `AiInferenceException` ([T-035](./troubleshooting.md#t-035)) | 4xx/5xx/타임아웃/네트워크/파싱실패는 호출자엔 다 "AI 못 받음" 한 가지. RestClient read 타임아웃이 본문 추출 도중 터지면 `ResourceAccessException` 이 아닌 상위 `RestClientException` 으로 와서, **상위 타입으로 넓게 catch** 해야 누락이 없다. cause 보존(T-033). `@Async` 라 호출자(일기 작성)엔 전파 안 됨 — FAILED 상태로만 표현. |
 
 ---
 
@@ -162,6 +163,7 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 
 | 일자 | 변경 |
 |---|---|
+| 2026-06-09 | **AI 서버 HTTP 어댑터 구현 (PR 4-final)** — `AiResponseClient` 인터페이스화 + `StubAiResponseClient`(기본)/`HttpAiResponseClient` + `ai.client.mode` 토글(OAuth2 패턴). 요청에 `userId` 추가 (`{userId,postId,title,content}` → `{message,emoji}`). `application.yaml` 에 `ai.*` 블록(client.mode/server.url/timeout-ms). WireMock 테스트 7케이스. 실패 catch 는 상위 `RestClientException` 으로 ([T-035](./troubleshooting.md#t-035)). **AI 서버 미배포 → 운영 기본값 stub 유지, 인증 보류, 계약 잠정.** 스키마 변경 없음. |
 | 2026-06-09 | **`GET /post` 정렬/필터 추가 (레벨 B)** — 정렬(기본 `postDate,desc`) + 선택적 `from`/`to`(postDate 범위) + `keyword`(제목/내용 부분일치). QueryDSL `PostSearchRepository` 신설 (`BooleanBuilder` 동적 조건), 정렬 화이트리스트 `PostSortField` enum, `InvalidPostSearchException`(400). 부수: `MethodArgumentTypeMismatchException` 글로벌 400 핸들러 ([T-034](./troubleshooting.md#t-034)) — 잘못된 날짜 형식 500 함정 봉합. dead code `findAllByUser_Id` 제거. **페이징은 분리** (TODO, `Page<>` breaking change). **인덱스 권장**: `post(user_id, post_date)` — `ddl-auto` 가 인덱스 미보장이라 운영 트래픽 증가 시 수동 DDL (PR body 명시). |
 | 2026-05-29 | **Post 에 `postDate` (LocalDate) 추가** — 사용자가 "지나간 날짜에 대한 일기" 작성 시 명시. 누락 시 서버가 `LocalDate.now()` 로 폴백 (기본 = "오늘 일기"). `createdAt` (자동) 과 별개. Request/Response DTO 모두 yyyy-MM-dd 포맷. update 시 변경 가능. `api-contracts.md` 의 Post 엔드포인트 4개 + 의사결정 로그 갱신. **운영 머지 전 RDS ALTER 필수** (`ddl-auto: update` 가 NOT NULL 추가 못 함 — T-019 교훈 5번). |
 | 2026-05-29 | **release PR #81 — T-031/T-032 hot-fix 운영 반영** — release PR #79 의 deploy 직후 발견된 함정 2건 (path enum case-sensitivity / silent 500 진단 가림막) 의 fix #80 을 main 으로. dev → main merge 충돌은 `-X ours` 패턴으로 자동 해결 (의사결정 로그 참조). 운영 검증: `/auth/oauth2/google` (소문자) → 401 정상 / `/auth/oauth2/twitter` → 400 정상. |

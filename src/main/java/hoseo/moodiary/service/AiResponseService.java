@@ -58,8 +58,10 @@ public class AiResponseService {
         AiResponse aiResponse = aiResponseRepository.findByPost_Id(postId)
                 .orElseThrow(() -> new AiResponseNotFoundException(postId));
         Post post = aiResponse.getPost();
+        // user 는 LAZY 프록시 — getId() 는 식별자만 읽어 추가 쿼리 없이 동작 (isOwnedBy 와 같은 패턴).
+        UUID userId = post.getUser().getId();
         try {
-            AiInferenceResult result = client.invoke(postId, post.getTitle(), post.getContent());
+            AiInferenceResult result = client.invoke(userId, postId, post.getTitle(), post.getContent());
             aiResponse.markDone(result.content(), result.emoji());
         } catch (AiInferenceException e) {
             // DB 의 FAILED 상태 + error_message 가 1차 진단 채널이지만 — 로그도 같이 떨어뜨려서
