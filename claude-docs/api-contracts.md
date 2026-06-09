@@ -539,9 +539,9 @@ GET /calendar?year=2026&month=5
 
 ### AI Response (🚧 Stub — PR 4-pre)
 
-> 🚧 **현재 (PR 4-pre, Stub 모드)**: 실제 AI 서버 호출 없이 고정 응답 (`emoji: "😊"`) 을 즉시 반환. `POST /post` 직후 거의 즉시 `DONE` 으로 전이되어 폴링 한 번이면 결과 도달.
+> 🚧 **운영 기본값 = Stub 모드** (`ai.client.mode=stub`): 실제 AI 서버 호출 없이 고정 응답 (`emoji: "😊"`) 을 즉시 반환. `POST /post` 직후 거의 즉시 `DONE` 으로 전이되어 폴링 한 번이면 결과 도달.
 >
-> **PR 4-final (예정)**: 실제 HTTP 어댑터 + Retry + 타임아웃. 외부 AI 서버 계약은 [아래 외부 시스템 계약 섹션](#ai-추론-서버-pr-4-final) 참조 — 합의 완료 후 어댑터만 교체.
+> **PR 4-final — HTTP 어댑터 구현됨** (`ai.client.mode=http`): `HttpAiResponseClient` 가 `{AI_SERVER_URL}/inference` 로 POST + 타임아웃 + 4xx/5xx/파싱실패 → FAILED. **AI 서버 미배포 상태라 토글은 아직 stub** — 외부 계약은 [아래 외부 시스템 계약 섹션](#ai-추론-서버-pr-4-final) (잠정) 참조. AI 서버 실체화 시 URL/필드명/인증만 맞추고 `AI_CLIENT_MODE=http` 로 전환.
 
 #### `GET /post/{id}/ai-response`
 사용자가 일기를 작성하면 즉시 `POST /post` 가 201 을 반환하고, **AI 응답은 비동기로 처리**된다. 프론트는 이 엔드포인트를 폴링해서 완료 여부를 확인.
@@ -603,42 +603,46 @@ Authorization: Bearer <accessToken>
 
 ### AI 추론 서버 (PR 4-final)
 
-#### 우리가 보낼 요청
-> ⚠️ **AI 담당자와 합의 필요**. 아래는 우리 측 제안 초안.
+> 🚧 **어댑터 구현됨 (토글 뒤, `ai.client.mode=http`)** — `HttpAiResponseClient`. 단, AI 서버가 아직 미배포 + 응답 형태 미확정이라 아래 계약은 **우리 측 잠정 제안**. 운영 기본값은 `stub`이라 영향 없음. AI 담당자 합의 후 필드명/URL/인증 확정.
 
+#### 우리가 보낼 요청
 ```http
 POST {AI_SERVER_URL}/inference
-Authorization: Bearer <AI_API_KEY>  (또는 합의된 인증 방식)
 Content-Type: application/json
+# 인증: 현 단계 보류(헤더 없음). AI 서버 실체화 시 합의 후 추가.
 
 {
-  "postId": "9c4d401e-...",
-  "title": "오늘의 기분",
+  "userId":  "f1e2d3c4-...",
+  "postId":  "9c4d401e-...",
+  "title":   "오늘의 기분",
   "content": "오늘은 기분이 좋았다. 친구를 만나서..."
 }
 ```
 
+- `userId` (string/UUID) — 작성자 식별. AI 서버가 사용자 단위 컨텍스트/식별에 사용.
+- `postId` (string/UUID) — 게시글 식별.
+- `title`, `content` (string) — 일기 제목/내용.
+
 #### 우리가 기대하는 응답 (성공)
 ```json
 {
-  "content": "AI가 생성한 응답 텍스트",
+  "message": "AI가 생성한 응답 텍스트",
   "emoji": "😊"
 }
 ```
 
-- `content` (string, required) — 사용자 일기에 대한 AI 응답 본문
-- `emoji` (string, required) — **유니코드 이모지 1자**. 사용자의 기분을 나타냄
+- `message` (string, required) — 사용자 일기에 대한 AI 응답 본문. 우리 DB `ai_response_content` 로 매핑.
+- `emoji` (string, required) — **유니코드 이모지 1자**. 사용자의 기분을 나타냄.
 
 #### 합의 항목 (체크리스트)
-- [ ] **URL**: 어디?
-- [ ] **인증**: API 키 헤더? IAM? 미인증? → 결정 후 GitHub Secrets에 추가
-- [ ] **응답 포맷**: 위 모양 그대로? 다르면 어댑터 필요
-- [ ] **응답 시간**: 평균 / p95 / 타임아웃 기준 (→ 우리 `@Async` 스레드풀 사이즈 / Retry 정책 결정)
-- [ ] **이모지 후보 풀**: AI가 어떤 이모지 세트를 사용? (캘린더 UI 일관성)
-  - 예: `😊 😢 😡 😴 😍 🤔 😎 🥰 😭 ...` 같은 닫힌 집합인지, 아니면 개방형인지
-- [ ] **에러 응답 포맷**: 실패 시 어떤 모양으로 오는지 (HTTP status + body)
+- [x] **요청 본문**: `{userId, postId, title, content}` 로 확정 (title 포함).
+- [ ] **URL**: 어디? → 확정 시 `AI_SERVER_URL` env var.
+- [ ] **인증**: 보류 중. 필요해지면 헤더 방식 합의 후 어댑터에 추가 + GitHub Secrets.
+- [ ] **응답 필드명**: 받는 텍스트가 `message` 맞는지(우리 어댑터는 `message`→`content` 매핑 가정). 다르면 어댑터 필드명만 조정.
+- [ ] **응답 시간**: 평균 / p95 / 타임아웃 기준 (현재 `AI_TIMEOUT_MS` 기본 10초).
+- [ ] **이모지 후보 풀**: 닫힌 집합인지(캘린더 UI 일관성) 개방형인지. 예: `😊 😢 😡 😴 😍 🤔 😎 🥰 😭 ...`
+- [ ] **에러 응답 포맷**: 실패 시 HTTP status + body 모양 (현재 우리는 4xx/5xx면 본문 무시하고 FAILED).
 - [ ] **레이트 리미트**: 분당 호출 한도?
-- [ ] **요청 본문**: title 분리 보낼지, content만 보낼지
 
 #### 우리 측 실패 처리
 | 시나리오 | 우리 행동 |
@@ -660,4 +664,5 @@ Content-Type: application/json
 | 2026-05-25 | PR 5 Calendar API 진행 중. `GET /calendar?year=YYYY&month=MM` 구현 — `emoji` 는 PR 4 머지 전까지 항상 null 임시 처리. 공통 규약에 `MissingServletRequestParameterException` 400 매핑 명시. |
 | 2026-05-26 | FE 공유용 정비. **엔드포인트 요약 표** 추가 (URL/Method/인증 헤더/Body/응답 한눈에). Auth (`/auth/signup`, `/auth/login`) 와 Calendar (`/calendar`) 를 "예정" → "구현된 API" 로 이동. Post CRUD 에 실제 구현된 인증 헤더 (`Authorization: Bearer`) + 소유권 401/403 매핑 반영. 회원가입 비밀번호 정책 (`^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$`) 명시. 로그인 응답에 `userId` 포함 명시. `409` (이메일/닉네임 중복) 에러 코드 추가. 공통 헤더 섹션 신설. |
 | 2026-05-27 | PR 4-pre 머지. `GET /post/{id}/ai-response` 를 "예정 API" → "구현된 API (🚧 Stub 모드)" 로 이동. Stub 박스 + errorMessage 분기 정책 (`@JsonInclude(NON_NULL)`, FAILED 만 포함) 명시. 엔드포인트 요약 표에 "🚧 Stub" 표시. 외부 시스템 계약 섹션 헤더 "PR 4" → "PR 4-final" 로 명확화. `POST /post` 가 일기 + `AiResponse(PENDING)` 같은 트랜잭션 저장 후 비동기 트리거하는 흐름 추가. |
+| 2026-06-09 | **AI 서버 HTTP 어댑터 (PR 4-final) 구현** — `AiResponseClient` 인터페이스화 + `StubAiResponseClient`/`HttpAiResponseClient` + `ai.client.mode` 토글 (OAuth2 패턴). 외부 계약에 `userId` 추가({userId,postId,title,content} → {message,emoji}), 인증 보류, 잠정 명시. 운영 기본값 stub 유지(AI 서버 미배포). |
 | 2026-06-09 | `GET /post` 정렬/필터 추가. Query Parameters 표 (`from`/`to`/`keyword`/`sort`, 전부 선택) + 기본 `postDate,desc` + 안정 tiebreaker(`createdAt desc → id asc`) 명시. `400` 에러 (잘못된 정렬·범위 역전·날짜 형식) 추가. 엔드포인트 요약 표 Body 칸 갱신. 인덱스 권장 (`post(user_id, post_date)`) 노트. 페이지네이션은 여전히 TODO (도입 시 `Page<>` breaking change). |
