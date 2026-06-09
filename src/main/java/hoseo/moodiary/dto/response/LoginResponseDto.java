@@ -22,4 +22,8 @@ public class LoginResponseDto {
 
     @Schema(description = "로그인된 사용자의 ID")
     private UUID userId;
+
+    @Schema(description = "로그인된 사용자의 닉네임 (전역 유니크). FE 헤더/프로필 표시용.",
+            example = "무디")
+    private String nickname;
 }

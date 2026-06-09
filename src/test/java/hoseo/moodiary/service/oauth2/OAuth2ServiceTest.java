@@ -96,6 +96,7 @@ class OAuth2ServiceTest {
             assertThat(response.getUserId()).isEqualTo(newId);
             assertThat(response.getAccessToken()).isEqualTo("ACCESS_JWT");
             assertThat(response.getRefreshToken()).isEqualTo("RAW_REFRESH");
+            assertThat(response.getNickname()).isEqualTo("Alice");
 
             ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
             verify(userRepository).save(userCaptor.capture());
@@ -151,6 +152,7 @@ class OAuth2ServiceTest {
             LoginResponseDto response = oauth2Service.login(AuthProvider.GOOGLE, accessToken);
 
             assertThat(response.getUserId()).isEqualTo(existingId);
+            assertThat(response.getNickname()).isEqualTo("Alice");
             verify(userRepository, never()).save(any(User.class));
             verify(userRepository, never()).findByEmail(any());
         }

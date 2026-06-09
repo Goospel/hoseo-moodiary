@@ -133,7 +133,7 @@ class UserServiceTest {
     class Login {
 
         @Test
-        @DisplayName("이메일/비밀번호 정상이면 access + refresh + userId 셋 다 반환한다")
+        @DisplayName("이메일/비밀번호 정상이면 access + refresh + userId + nickname 넷 다 반환한다")
         void success() {
             UUID userId = UUID.randomUUID();
             User stored = userWithId(userId, "a@b.com", "HASHED", "nick");
@@ -148,6 +148,7 @@ class UserServiceTest {
             assertThat(result.getAccessToken()).isEqualTo("issued.jwt.token");
             assertThat(result.getRefreshToken()).isEqualTo("issued-refresh-token");
             assertThat(result.getUserId()).isEqualTo(userId);
+            assertThat(result.getNickname()).isEqualTo("nick");
         }
 
         @Test
