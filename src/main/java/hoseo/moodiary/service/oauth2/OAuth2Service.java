@@ -74,6 +74,7 @@ public class OAuth2Service {
                 .accessToken(accessToken)
                 .refreshToken(refreshToken)
                 .userId(userId)
+                .nickname(user.getNickname())
                 .build();
     }
 

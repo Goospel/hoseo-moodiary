@@ -50,7 +50,7 @@
 | 기능 | Method | URL | 인증 헤더 | Body | 성공 응답 |
 |---|---|---|---|---|---|
 | 회원가입 | `POST` | `/auth/signup` | ❌ 불필요 | ✅ JSON | `201` UUID 문자열 |
-| 로그인 | `POST` | `/auth/login` | ❌ 불필요 | ✅ JSON | `200` `{ accessToken, refreshToken, userId }` |
+| 로그인 | `POST` | `/auth/login` | ❌ 불필요 | ✅ JSON | `200` `{ accessToken, refreshToken, userId, nickname }` |
 | 토큰 갱신 | `POST` | `/auth/refresh` | ❌ 불필요 | ✅ JSON | `200` `{ accessToken, refreshToken }` (rotation) |
 | 로그아웃 | `POST` | `/auth/logout` | ❌ 불필요 | ✅ JSON | `204` (바디 없음) |
 | 게시글 작성 | `POST` | `/post` | ✅ 필수 | ✅ JSON | `201` UUID 문자열 |
@@ -203,13 +203,15 @@ Content-Type: application/json
 {
   "accessToken": "eyJhbGciOiJIUzI1NiJ9...",
   "refreshToken": "Xy7-aBcD...",
-  "userId": "9c4d401e-63ba-413e-abbe-a6d5cf869f0e"
+  "userId": "9c4d401e-63ba-413e-abbe-a6d5cf869f0e",
+  "nickname": "무디"
 }
 ```
 
 - `accessToken` — JWT (HS256). 1시간 수명. 이후 모든 보호된 요청의 `Authorization` 헤더에 `Bearer <accessToken>` 형태로 첨부
 - `refreshToken` — 32-byte secure random (base64). **2주 수명**. access 만료 시 `POST /auth/refresh` 로 갱신
 - `userId` — 로그인된 사용자 UUID (FE 가 캐싱해두면 편리)
+- `nickname` — 로그인된 사용자의 닉네임 (전역 유니크, 최대 20자). FE 헤더/프로필 표시용. LOCAL / OAuth2 로그인 양쪽 동일하게 포함.
 
 > 📌 **토큰 수명** (PR 10):
 > - access token = **1시간** (`JWT_ACCESS_EXPIRATION_MS`, 기본 3,600,000ms)
