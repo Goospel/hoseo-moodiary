@@ -206,7 +206,7 @@ jwt:
 ### 소유권 격리 — "본인 글만"
 Post 도메인 핵심 규칙:
 - `POST /post` — 작성자 = 현재 인증된 사용자 자동 채움 (클라이언트가 user_id 박을 수 없음)
-- `GET /post` — 본인 글만 반환 (`findAllByUser_Id(currentUserId)`)
+- `GET /post` — 본인 글만 반환 (`PostSearchRepository.search(...)` 가 `post.user.id.eq(currentUserId)` 를 항상 where 에 박음 — 정렬/필터와 무관하게 소유권 경계 고정)
 - `GET /post/{id}` — 본인 글이면 200, 타인 글이면 **403** (404 가 아님 — 존재는 확인되지만 권한 없음)
 - `PUT /post/{id}`, `DELETE /post/{id}` — 본인 글만 수정/삭제
 

@@ -6,10 +6,12 @@ import hoseo.moodiary.dto.response.PostResponseDto;
 import hoseo.moodiary.service.AiResponseService;
 import hoseo.moodiary.service.PostService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -19,8 +21,10 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -55,12 +59,26 @@ public class PostController {
         return ResponseEntity.status(HttpStatus.CREATED).body(postId);
     }
 
-    @Operation(summary = "내 게시글 전체 조회", description = "현재 사용자가 작성한 게시글만 반환.")
+    @Operation(summary = "내 게시글 전체 조회",
+            description = "현재 사용자가 작성한 게시글만 반환. 정렬(기본 일기날짜 최신순) + 선택적 필터 지원.\n\n"
+                    + "- `from`/`to`: 일기 날짜(postDate) 범위 (둘 다 inclusive, yyyy-MM-dd). 한쪽만 줘도 됨.\n"
+                    + "- `keyword`: 제목/내용 부분일치 (대소문자 무시).\n"
+                    + "- `sort`: `필드,방향` 형식. 필드는 `postDate`/`createdAt`, 방향은 `asc`/`desc`. 기본 `postDate,desc`.")
     @ApiResponse(responseCode = "200", description = "조회 성공 (빈 배열 가능)")
+    @ApiResponse(responseCode = "400", description = "잘못된 정렬/방향, 날짜 범위 역전, 또는 날짜 형식 오류")
     @ApiResponse(responseCode = "401", description = "미인증")
     @GetMapping("/post")
-    public ResponseEntity<List<PostResponseDto>> getAll(@AuthenticationPrincipal UUID userId) {
-        return ResponseEntity.ok(service.getAllPosts(userId));
+    public ResponseEntity<List<PostResponseDto>> getAll(
+            @AuthenticationPrincipal UUID userId,
+            @Parameter(description = "일기 날짜 하한 (inclusive, yyyy-MM-dd)", example = "2026-05-01")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @Parameter(description = "일기 날짜 상한 (inclusive, yyyy-MM-dd)", example = "2026-05-31")
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @Parameter(description = "제목/내용 키워드 (부분일치, 대소문자 무시)", example = "여행")
+            @RequestParam(required = false) String keyword,
+            @Parameter(description = "정렬 기준 '필드,방향' (필드: postDate|createdAt, 방향: asc|desc)", example = "postDate,desc")
+            @RequestParam(required = false, defaultValue = "postDate,desc") String sort) {
+        return ResponseEntity.ok(service.getAllPosts(userId, from, to, keyword, sort));
     }
 
     @Operation(summary = "게시글 단건 조회", description = "본인 글만 조회 가능.")

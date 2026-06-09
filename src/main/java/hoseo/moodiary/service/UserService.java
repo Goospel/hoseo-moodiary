@@ -74,6 +74,7 @@ public class UserService {
                 .accessToken(accessToken)
                 .refreshToken(refreshToken)
                 .userId(userId)
+                .nickname(user.getNickname())
                 .build();
     }
 

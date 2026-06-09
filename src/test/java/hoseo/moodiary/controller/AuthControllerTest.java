@@ -167,13 +167,14 @@ class AuthControllerTest {
         }
 
         @Test
-        @DisplayName("이메일/비밀번호 정상이면 200과 accessToken + refreshToken + userId 셋 다 반환한다")
+        @DisplayName("이메일/비밀번호 정상이면 200과 accessToken + refreshToken + userId + nickname 넷 다 반환한다")
         void success() throws Exception {
             UUID userId = UUID.randomUUID();
             given(userService.login(any(LoginRequestDto.class))).willReturn(LoginResponseDto.builder()
                     .accessToken("issued.jwt.token")
                     .refreshToken("issued-refresh-token")
                     .userId(userId)
+                    .nickname("무디")
                     .build());
 
             mockMvc.perform(post("/auth/login")
@@ -182,7 +183,8 @@ class AuthControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.accessToken").value("issued.jwt.token"))
                     .andExpect(jsonPath("$.refreshToken").value("issued-refresh-token"))
-                    .andExpect(jsonPath("$.userId").value(userId.toString()));
+                    .andExpect(jsonPath("$.userId").value(userId.toString()))
+                    .andExpect(jsonPath("$.nickname").value("무디"));
         }
 
         @Test
@@ -312,17 +314,18 @@ class AuthControllerTest {
         }
 
         @Test
-        @DisplayName("소문자 path (`google`) 도 GOOGLE 로 정규화되어 200 반환 — T-031 fix")
+        @DisplayName("소문자 path (`google`) 도 GOOGLE 로 정규화되어 200 반환 — T-031 fix. 응답에 nickname 포함")
         void lowercase_path_works() throws Exception {
             UUID userId = UUID.randomUUID();
             given(oauth2Service.login(eq(AuthProvider.GOOGLE), any())).willReturn(LoginResponseDto.builder()
-                    .accessToken("acc").refreshToken("ref").userId(userId).build());
+                    .accessToken("acc").refreshToken("ref").userId(userId).nickname("Alice").build());
 
             mockMvc.perform(post("/auth/oauth2/google")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(oauth2Body("stub:GOOGLE:google-1:a@b.com:A")))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.accessToken").value("acc"));
+                    .andExpect(jsonPath("$.accessToken").value("acc"))
+                    .andExpect(jsonPath("$.nickname").value("Alice"));
 
             // controller 가 GOOGLE 로 정규화해서 service 호출했는지 검증
             verify(oauth2Service).login(eq(AuthProvider.GOOGLE), any());

@@ -1,14 +1,17 @@
 package hoseo.moodiary.service;
 
 import hoseo.moodiary.dto.request.PostRequestDto;
+import hoseo.moodiary.dto.request.PostSortField;
 import hoseo.moodiary.dto.response.PostResponseDto;
 import hoseo.moodiary.entitiy.AiResponse;
 import hoseo.moodiary.entitiy.Post;
 import hoseo.moodiary.entitiy.User;
+import hoseo.moodiary.exception.InvalidPostSearchException;
 import hoseo.moodiary.exception.PostAccessDeniedException;
 import hoseo.moodiary.exception.PostNotFoundException;
 import hoseo.moodiary.repository.AiResponseJpaRepository;
 import hoseo.moodiary.repository.PostJpaRepository;
+import hoseo.moodiary.repository.PostSearchRepository;
 import hoseo.moodiary.repository.UserJpaRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -28,6 +31,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -48,6 +53,9 @@ class PostServiceTest {
 
     @Mock
     private AiResponseJpaRepository aiResponseRepository;
+
+    @Mock
+    private PostSearchRepository postSearchRepository;
 
     @InjectMocks
     private PostService postService;
@@ -150,31 +158,98 @@ class PostServiceTest {
     }
 
     @Nested
-    @DisplayName("getAllPosts — 본인 글 전체 조회")
+    @DisplayName("getAllPosts — 본인 글 목록 (정렬 + 필터)")
     class GetAllPosts {
 
         @Test
-        @DisplayName("본인 게시글이 없으면 빈 리스트")
+        @DisplayName("결과가 없으면 빈 리스트")
         void empty() {
-            given(postRepository.findAllByUser_Id(OWNER_ID)).willReturn(List.of());
+            given(postSearchRepository.search(eq(OWNER_ID), any(), any(), any(), any(), anyBoolean()))
+                    .willReturn(List.of());
 
-            assertThat(postService.getAllPosts(OWNER_ID)).isEmpty();
+            assertThat(postService.getAllPosts(OWNER_ID, null, null, null, null)).isEmpty();
         }
 
         @Test
-        @DisplayName("본인의 글만 DTO로 매핑해 반환한다")
+        @DisplayName("조회된 글을 DTO 로 매핑해 반환한다")
         void withItems() {
             UUID p1 = UUID.randomUUID();
             UUID p2 = UUID.randomUUID();
-            given(postRepository.findAllByUser_Id(OWNER_ID)).willReturn(List.of(
-                    postWithId(p1, OWNER_ID, "t1", "c1"),
-                    postWithId(p2, OWNER_ID, "t2", "c2")
-            ));
+            given(postSearchRepository.search(eq(OWNER_ID), any(), any(), any(), any(), anyBoolean()))
+                    .willReturn(List.of(
+                            postWithId(p1, OWNER_ID, "t1", "c1"),
+                            postWithId(p2, OWNER_ID, "t2", "c2")
+                    ));
 
-            List<PostResponseDto> result = postService.getAllPosts(OWNER_ID);
+            List<PostResponseDto> result = postService.getAllPosts(OWNER_ID, null, null, null, null);
 
             assertThat(result).hasSize(2);
             assertThat(result).extracting(PostResponseDto::getId).containsExactly(p1, p2);
+        }
+
+        @Test
+        @DisplayName("sort/필터 누락 시 기본값(postDate desc) 으로 repository 호출")
+        void defaultSort() {
+            given(postSearchRepository.search(eq(OWNER_ID), any(), any(), any(), any(), anyBoolean()))
+                    .willReturn(List.of());
+
+            postService.getAllPosts(OWNER_ID, null, null, null, null);
+
+            verify(postSearchRepository).search(OWNER_ID, null, null, null, PostSortField.POST_DATE, false);
+        }
+
+        @Test
+        @DisplayName("from/to/keyword/sort 를 그대로 파싱해 repository 에 전달한다")
+        void passesFiltersThrough() {
+            LocalDate from = LocalDate.of(2026, 5, 1);
+            LocalDate to = LocalDate.of(2026, 5, 31);
+            given(postSearchRepository.search(eq(OWNER_ID), any(), any(), any(), any(), anyBoolean()))
+                    .willReturn(List.of());
+
+            postService.getAllPosts(OWNER_ID, from, to, "여행", "createdAt,asc");
+
+            verify(postSearchRepository).search(OWNER_ID, from, to, "여행", PostSortField.CREATED_AT, true);
+        }
+
+        @Test
+        @DisplayName("방향 생략 시 desc 기본 — 'createdAt' 만 줘도 동작")
+        void directionOmittedDefaultsDesc() {
+            given(postSearchRepository.search(eq(OWNER_ID), any(), any(), any(), any(), anyBoolean()))
+                    .willReturn(List.of());
+
+            postService.getAllPosts(OWNER_ID, null, null, null, "createdAt");
+
+            verify(postSearchRepository).search(OWNER_ID, null, null, null, PostSortField.CREATED_AT, false);
+        }
+
+        @Test
+        @DisplayName("화이트리스트에 없는 정렬 필드 → InvalidPostSearchException, repository 미호출")
+        void invalidSortField() {
+            assertThatThrownBy(() -> postService.getAllPosts(OWNER_ID, null, null, null, "content,desc"))
+                    .isInstanceOf(InvalidPostSearchException.class);
+
+            verify(postSearchRepository, never()).search(any(), any(), any(), any(), any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("알 수 없는 정렬 방향 → InvalidPostSearchException")
+        void invalidSortDirection() {
+            assertThatThrownBy(() -> postService.getAllPosts(OWNER_ID, null, null, null, "postDate,sideways"))
+                    .isInstanceOf(InvalidPostSearchException.class);
+
+            verify(postSearchRepository, never()).search(any(), any(), any(), any(), any(), anyBoolean());
+        }
+
+        @Test
+        @DisplayName("from 이 to 보다 늦으면 InvalidPostSearchException, repository 미호출")
+        void invertedRange() {
+            LocalDate from = LocalDate.of(2026, 5, 31);
+            LocalDate to = LocalDate.of(2026, 5, 1);
+
+            assertThatThrownBy(() -> postService.getAllPosts(OWNER_ID, from, to, null, null))
+                    .isInstanceOf(InvalidPostSearchException.class);
+
+            verify(postSearchRepository, never()).search(any(), any(), any(), any(), any(), anyBoolean());
         }
     }
 
