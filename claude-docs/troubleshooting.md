@@ -9,7 +9,7 @@
 > - 단순 오타 / 개인 IDE 문제는 skip.
 > - 항목 schema: **증상 / 원인 / 해결 / 시점 / 교훈**.
 >
-> 마지막 갱신: 2026-06-09 (T-034 추가 — `GET /post` 정렬/필터 추가 시 날짜 쿼리 파라미터 변환 실패가 generic 500 으로 떨어지는 함정. T-031 과 같은 `MethodArgumentTypeMismatchException` 메커니즘인데 T-031 은 controller `.toUpperCase()` 국소 우회였을 뿐 핸들러 공백을 안 닫았다 → 글로벌 `@ExceptionHandler` 로 카테고리째 봉합.)
+> 마지막 갱신: 2026-06-09 (T-035 추가 — AI 서버 HTTP 어댑터의 RestClient read 타임아웃이 본문 추출 도중 터지면 `ResourceAccessException` 이 아닌 상위 `RestClientException` 으로 와서 타임아웃 catch 가 누락되던 함정. 상위 타입으로 넓게 catch. T-034 는 같은 날 쿼리 파라미터 타입 변환 500 함정.)
 
 ---
 
@@ -68,6 +68,8 @@ CORS 운영 검증 (PR #38) 직후 컨테이너 restart loop → 표면은 "CORS
 - [T-032](#t-032) **`GlobalExceptionHandler` 의 generic `Exception` 핸들러가 예외를 무로깅한 채 500 반환 → docker logs 에 흔적 0, 진단 불가** — T-031 디버깅 중 발견. 운영 환경에서 unhandled 예외가 응답으로만 떨어지고 stack trace 가 어디에도 안 남아서 "왜 500 인지" 추적 불가. 해결: `@Slf4j` + `log.error("...", e)` 추가 — body 는 동일 ("서버 오류"), stdout 만 풍부. 향후 silent 500 함정의 첫 단서.
 - [T-033](#t-033) **T-032 교훈 4 sweep — `catch` 5건 분석 후 silent swallow 2건 fix + 의도적 침묵 1건 명시** — `AiResponseService.@Async` 가 `AiInferenceException` 을 잡고 DB FAILED 만 마킹 (log 0) → log.warn 추가 / `HttpGoogleOAuth2Provider` 가 `ResourceAccessException` 의 cause chain 만 버리고 message 만 copy → cause 보존 + log.warn / `JwtAuthenticationFilter` 의 JWT 검증 실패 catch 는 high-volume path 의 의도적 침묵 (분당 수백 라인 floods 위험) — fix 안 함, docstring 만 명시. **fault 유형별 로그 레벨 매핑** + **의도적 침묵의 docstring 명시** 두 패턴.
 - [T-034](#t-034) **쿼리 파라미터 타입 변환 실패 → 500 (T-031 의 근본 메커니즘을 글로벌하게 봉합)** — `GET /post?from=abc` 처럼 `@RequestParam LocalDate` 로 못 바꾸는 값은 binding 단계에서 `MethodArgumentTypeMismatchException` 을 던지는데, 전용 핸들러가 없어 generic 500 으로 떨어진다. T-031 은 같은 예외를 path enum (`/auth/oauth2/google`) 케이스에서 controller 의 `.toUpperCase()` 로만 국소 처리했을 뿐, 핸들러 공백 자체는 안 닫았다. `GET /post` 에 날짜 쿼리 파라미터가 생기며 같은 함정이 재노출 → `@ExceptionHandler(MethodArgumentTypeMismatchException.class)` 로 400 매핑해 **카테고리 전체(쿼리/path 의 모든 타입 변환 실패)를 한 번에 봉합**.
+- [T-035](#t-035) **RestClient read 타임아웃이 `ResourceAccessException` 아닌 `RestClientException`(body 추출 단계)으로 올라옴 → 타임아웃 catch 누락** — `HttpAiResponseClient` 타임아웃 테스트가 `catch (ResourceAccessException)` 을 통과해버리고 `RestClientException: Error while extracting response ... [application/octet-stream]` 로 떨어졌다. read 타임아웃이 **응답 본문 읽기 도중** 터지면 connect 단계의 `ResourceAccessException` 이 아니라 추출 단계의 `RestClientException` 으로 surface 한다. 해결: 상위 타입 `RestClientException` 으로 넓게 catch (`ResourceAccessException` 도 하위라 함께 잡힘). `onStatus` 의 도메인 예외(`AiInferenceException`)는 `RestClientException` 이 아니라 안 잡히고 정상 전파.
+- [T-036](#t-036) **`@Column` length 미지정 String → JPA 기본 `VARCHAR(255)` → 256자+ 본문 저장 시 `Data too long` 으로 500 (FE: "여러 줄 일기 저장 실패")** — `Post.content` 가 `@Column(name="post_content")` 만 달려 길이 미지정 → 기본 `VARCHAR(255)`. 256자 넘는 (특히 여러 줄) 일기가 `DataIntegrityViolationException`(H2: `Value too long for column`)로 터지고 미핸들 → generic 500 `{"message":"서버 오류가 발생했습니다."}`. **줄바꿈이 아니라 길이가 원인** — 짧은 글이 201 로 통과한 것과 일관. 해결: 컬럼 `columnDefinition="TEXT"` + DTO `@Size(max=...)` 로 binding 단계 400. **운영 주의**: `ddl-auto:update` 는 기존 컬럼 타입/길이를 ALTER 안 함 → 수동 `ALTER TABLE post MODIFY COLUMN post_content TEXT;` 필요.
 
 ### AWS / 운영 인프라
 - [T-006](#t-006) EC2 stop/start 시 퍼블릭 IP가 매번 바뀜 → GitHub Secret 갱신 지옥
@@ -404,6 +406,31 @@ CORS 운영 검증 (PR #38) 직후 컨테이너 restart loop → 표면은 "CORS
 | **해결** | `@ExceptionHandler(MethodArgumentTypeMismatchException.class)` 를 추가해 **400 + "파라미터 형식이 올바르지 않습니다: {파라미터명}"** 으로 매핑. path enum / 쿼리 날짜 / `@PathVariable UUID` 등 **모든 타입 변환 실패를 한 핸들러가 카테고리째 봉합**. T-031 의 controller `.toUpperCase()` 우회는 그대로 둬도 무방(닉네임 정규화 의미가 있음)하지만, 이제 그게 빠져도 500 대신 400 이 나간다. |
 | **시점** | `GET /post` 정렬/필터 PR — 2026-06-09. 새 쿼리 파라미터 추가가 트리거. |
 | **교훈** | **1. 국소 우회는 함정의 한 입구만 막는다 — 핸들러 공백은 핸들러로 닫아라**<br>T-031 을 controller 한 곳에서 `.toUpperCase()` 로만 처리한 게 정확히 그 함정. 같은 예외(`MethodArgumentTypeMismatchException`)가 다른 입력 표면(쿼리 날짜)으로 재진입하니 또 500. **"이 예외가 다른 진입점으로도 들어올 수 있는가?" 를 fix 시점에 물었으면** 그때 글로벌 핸들러를 박았을 것.<br><br>**2. 프레임워크가 컨트롤러 호출 전에 던지는 예외는 try-catch 로 못 잡는다 — `@ControllerAdvice` 가 유일한 그물**<br>바인딩/검증 단계 예외(`MethodArgumentTypeMismatch`, `MethodArgumentNotValid`, `MissingServletRequestParameter`, `HttpMessageNotReadable`)는 전부 메서드 바디 진입 전. 컨트롤러 안에서는 손쓸 수 없고 오직 `@RestControllerAdvice` 에서만 매핑 가능. **이 4종은 REST API 의 표준 400 세트** — 새 프로젝트 셋업 시 한 번에 다 깔아두면 같은 류의 silent 500 을 예방.<br><br>**3. 새 입력 표면(파라미터/헤더/path)을 추가할 때마다 "잘못된 형식이면 무슨 상태코드?" 를 점검**<br>필드 하나 추가가 곧 새 실패 모드 하나 추가. 특히 `String` 이 아닌 타입(LocalDate / UUID / enum / 숫자)은 전부 변환 실패 가능 → 타입 미스매치 핸들러의 커버리지 확인. |
+
+<a id="t-035"></a>
+### T-035 · RestClient read 타임아웃이 `ResourceAccessException` 아닌 `RestClientException`(추출 단계)으로 옴
+
+| 항목 | 내용 |
+|---|---|
+| **증상** | AI 서버 HTTP 어댑터(`HttpAiResponseClient`)의 타임아웃 테스트(WireMock `withFixedDelay(1500)` + readTimeout 300ms)가 실패. 기대는 `AiInferenceException` 인데 실제로는 `org.springframework.web.client.RestClientException: Error while extracting response for type [...InferenceResponse] and content type [application/octet-stream]` 가 그대로 튀어나옴. 내 `catch (ResourceAccessException e)` 를 빠져나감. |
+| **원인** | RestClient 의 read 타임아웃이 **언제 터지느냐**에 따라 예외 타입이 다르다.<br>- **connect 단계 / 응답 헤더 도착 전** 타임아웃 → `ResourceAccessException` (전형적인 기대).<br>- **응답 본문 읽기 도중**(헤더는 받았는데 body 가 지연) 타임아웃 → 메시지 컨버터의 `readWithMessageConverters` 안에서 IOException 발생 → `RestClientException` (extraction 실패) 로 wrap. content-type 이 `application/octet-stream` 으로 찍히는 건 본문을 정상 파싱 못 했다는 신호.<br>WireMock 의 `withFixedDelay` 는 헤더+본문을 통째로 지연시켜서 후자 경로를 탔다. `ResourceAccessException` 만 잡으면 이 케이스가 누락. |
+| **해결** | `ResourceAccessException` 의 **상위 타입 `RestClientException` 으로 넓게 catch**. 상속 관계: `RestClientException` ← `ResourceAccessException`. 넓게 잡으면 connect 타임아웃 / read 타임아웃(헤더 전·후) / 네트워크 / 추출 실패 전부 한 곳에서 `AiInferenceException` 으로 변환. 주의: `onStatus(4xx/5xx)` 에서 던지는 우리 도메인 예외(`AiInferenceException`)는 `RestClientException` 이 아니라 이 catch 에 안 걸리고 정상 전파된다(4xx/5xx 테스트로 검증). cause 는 보존(`new AiInferenceException(msg, e)`) — T-033 패턴. |
+| **시점** | AI 서버 HTTP 어댑터 PR (PR 4-final) — 2026-06-09. WireMock 타임아웃 테스트가 노출. |
+| **교훈** | **1. "타임아웃 = ResourceAccessException" 은 절반만 맞다**<br>RestClient/RestTemplate 의 read 타임아웃은 터지는 시점(헤더 전 vs 본문 중)에 따라 `ResourceAccessException` 또는 `RestClientException`(추출) 으로 갈린다. transport 실패를 빠짐없이 잡으려면 **상위 `RestClientException` 으로 잡는 게 안전**. `RestClientResponseException`(4xx/5xx 자동 변환, onStatus 미사용 시)도 같은 계층이므로 onStatus 를 안 쓰면 이것도 함께 걸린다 — 우리는 onStatus 로 분기하니 별개.<br><br>**2. WireMock `withFixedDelay` 는 "본문 읽기 중 타임아웃" 을 재현한다**<br>타임아웃 테스트를 짤 때 어떤 종류의 타임아웃을 재현하는지 의식해야 한다. `withFixedDelay` 는 응답 전체 지연 → read 타임아웃 → 추출 단계 예외. connect 타임아웃을 재현하려면 닫힌 포트/블랙홀 IP 가 필요(테스트로는 까다로움). **테스트가 재현하는 실패 모드와 catch 가 잡는 예외 타입을 일치시켜라.**<br><br>**3. 외부 호출 어댑터는 "성공 외 전부 한 예외로" 가 안전한 기본값**<br>4xx/5xx/타임아웃/네트워크/파싱실패는 호출자 입장에선 다 "AI 못 받음" 한 가지. 세분화가 필요 없으면 상위 예외로 넓게 잡아 도메인 예외 하나로 변환하는 게 누락 위험이 적다. 단 cause 는 항상 보존해 진단 단서 유지. |
+
+---
+
+<a id="t-036"></a>
+### T-036 · `@Column` length 미지정 String → 기본 `VARCHAR(255)` → 긴 본문 저장 시 500
+
+| 항목 | 내용 |
+|---|---|
+| **증상** | FE 버그 제보: 짧은 일기는 `POST /post` 201 정상 저장. 그런데 **여러 줄로 작성한 (=긴) 본문**은 500 + `{"message":"서버 오류가 발생했습니다."}`. FE 는 "content 길이 제한이나 줄바꿈(\n) 처리 문제" 를 의심. |
+| **원인** | `Post.content` 가 `@Column(name = "post_content")` 만 달려 **length 미지정**. JPA/Hibernate 는 `String` 의 길이를 안 주면 **기본 `VARCHAR(255)`** 로 매핑한다. 256자 넘는 본문이 들어오면 DB 가 `Data too long for column 'post_content'` (H2: `Value too long for column "POST_CONTENT CHARACTER VARYING(255)"`) 를 던지고 → Spring 이 `DataIntegrityViolationException` 으로 변환 → `GlobalExceptionHandler` 에 전용 분기가 없어 fallback `@ExceptionHandler(Exception.class)` 가 잡아 **500**. **줄바꿈(\n) 자체는 무관** — `VARCHAR` 는 개행을 정상 저장한다. 여러 줄 일기가 길어서 255자를 쉽게 넘긴 것이 진짜 원인이고, 짧은 글이 201 로 통과한 것이 이를 뒷받침. `@DataJpaTest` 로 485자 본문 저장이 정확히 위 예외로 재현됨. |
+| **해결** | **두 겹 방어**.<br>1. **컬럼 확장**: `@Column(name="post_content", columnDefinition="TEXT")` — 긴 일기를 DB 가 받게.<br>2. **입력 검증**: DTO 에 `@Size(max=255)`(title) / `@Size(max=10000)`(content) — 한도 초과는 binding 단계 `MethodArgumentNotValidException` → 이미 매핑된 **400** 으로 깔끔하게 거른다(DB 도달 전). 500 대신 사용자 입력 오류임을 알림.<br>회귀 테스트: `PostContentLengthTest`(@DataJpaTest, 600자 여러 줄 저장 성공) + `PostControllerTest`(10001자 → 400). |
+| **운영 머지 전 필수** | `ddl-auto: update` 는 **기존 컬럼의 타입/길이를 ALTER 하지 않는다** (컬럼/테이블 추가만 함). 이미 `VARCHAR(255)` 로 생성된 운영 MySQL 은 엔티티만 바꿔선 안 넓어진다 → 수동 DDL 필요:<br>&nbsp;&nbsp;```sql<br>&nbsp;&nbsp;ALTER TABLE post MODIFY COLUMN post_content TEXT;<br>&nbsp;&nbsp;```<br>적용 안 하면 운영에서 같은 500 이 계속 난다. |
+| **시점** | FE 버그 제보 대응 — 2026-06-09. |
+| **교훈** | **1. JPA `String` 컬럼은 length 를 명시하지 않으면 `VARCHAR(255)` — 본문성 필드는 반드시 TEXT/length 지정**<br>제목·닉네임 같은 짧은 필드는 255 로 충분하지만 일기 본문/댓글/설명처럼 길어질 수 있는 필드는 기본값이 곧 함정. 엔티티 만들 때 "이 필드 최댓값이 255 를 넘을 수 있나?" 를 본문성 필드마다 자문.<br><br>**2. "줄바꿈 때문"같은 그럴듯한 증상 해석에 끌려가지 말고 예외 메시지로 확인**<br>FE 의 "\n 처리 문제" 가설은 자연스럽지만 틀렸다. `Data too long` 이라는 DB 예외 한 줄이 길이 문제임을 즉시 가른다. **재현 + 실제 예외 확인**이 추측보다 빠르고 정확.<br><br>**3. `ddl-auto: update` 는 컬럼 확장을 자동 반영하지 않는다 — 길이/타입 변경은 항상 수동 DDL**<br>update 모드는 "누락된 컬럼·테이블 추가" 만 한다. 기존 컬럼의 `VARCHAR(255)→TEXT`, `NOT NULL` 추가, 인덱스 생성 등은 보장 안 됨(프로젝트 DB 정책과 동일). 엔티티 컬럼 정의를 바꾸는 PR 은 항상 "운영 DB 에 수동 ALTER 가 필요한가?" 점검.<br><br>**4. DB 제약 위반(500)은 입력 검증(400)으로 한 겹 앞에서 막는 게 사용자 친화적**<br>컬럼을 TEXT 로 넓혀도 무한히 큰 페이로드는 막아야 한다. `@Size` 로 binding 단계에서 거르면 의미 있는 400 메시지가 나가고 DB·서버 부하도 던다. T-034 의 "binding 단계 예외는 `@ControllerAdvice` 로 400" 철학과 같은 결. |
 
 ---
 

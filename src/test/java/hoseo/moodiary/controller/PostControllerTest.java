@@ -133,6 +133,22 @@ class PostControllerTest {
         }
 
         @Test
+        @DisplayName("content 가 10000자를 넘으면 400 (DB 도달 전 차단), 서비스 미호출")
+        void create_tooLongContent_returns400() throws Exception {
+            String tooLong = "가".repeat(10001);
+            String body = objectMapper.writeValueAsString(
+                    PostRequestDto.builder().title("title").content(tooLong).build());
+
+            mockMvc.perform(post("/post").with(asUser(USER_ID))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("내용은 10000자를 넘을 수 없습니다."));
+
+            verify(postService, never()).create(any(), any());
+        }
+
+        @Test
         @DisplayName("JSON 파싱 실패면 400과 일반 메시지")
         void create_malformedJson_returns400() throws Exception {
             mockMvc.perform(post("/post").with(asUser(USER_ID))
