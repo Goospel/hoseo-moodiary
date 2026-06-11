@@ -28,6 +28,7 @@
 14. [Silent catch 의 두 얼굴 — 의도적 침묵 (high-volume) vs 운영 사고 (저-volume) + 메트릭 채널](#14-silent-catch-의-두-얼굴--의도적-침묵-high-volume-vs-운영-사고-저-volume--메트릭-채널)
 15. [Mixed Content — HTTPS 페이지의 HTTP API 호출은 브라우저가 *요청 전에* 차단 (Vercel rewrites 가 빠른 해결책)](#15-mixed-content--https-페이지의-http-api-호출은-브라우저가-요청-전에-차단-vercel-rewrites-가-빠른-해결책)
 16. [JPA `String` 컬럼의 기본 `VARCHAR(255)` 함정 + `ddl-auto:update` 는 기존 컬럼을 안 넓힌다](#16-jpa-string-컬럼의-기본-varchar255-함정--ddl-autoupdate-는-기존-컬럼을-안-넓힌다)
+17. [403 "Invalid CORS request" 의 정체 — 서버가 던지는 CORS 거부 + origin 정확 문자열 매칭 + env 외부화 함정](#17-403-invalid-cors-request-의-정체--서버가-던지는-cors-거부--origin-정확-문자열-매칭--env-외부화-함정)
 
 ---
 
@@ -1610,6 +1611,77 @@ ALTER TABLE post MODIFY COLUMN post_content TEXT;
 
 ---
 
+## 17. 403 "Invalid CORS request" 의 정체 — 서버가 던지는 CORS 거부 + origin 정확 문자열 매칭 + env 외부화 함정
+
+### 한 줄 요약
+> `403 Invalid CORS request` 는 **브라우저가 아니라 서버(Spring)가** 던지는 거부다 — 요청의 `Origin` 헤더가 서버의 허용 목록(allowlist)에 **정확히 일치하지 않을 때** Spring 이 응답을 200 대신 403 으로 끊는다. 매칭은 정규식이 아니라 **scheme + host + port 의 정확한 문자열 일치** — `https://` 와 `http://`, 끝의 `/` 하나가 달라도 불일치. 우리는 allowlist 를 코드가 아니라 **환경변수(`APP_CORS_ALLOWED_ORIGINS`)로 외부화**해서 운영 origin 을 EC2 `.env` 로만 관리한다.
+
+### #12 와 무엇이 다른가 — "정책 개념" vs "이 에러 메시지"
+[12번 노트](#12-cors--same-origin-policy--브라우저-차단-메커니즘--preflight--allowlist-vs-와일드카드)가 CORS 의 *원리*(SOP / preflight / 와일드카드)라면, 이 노트는 운영에서 실제로 마주친 **`403 Invalid CORS request` 한 줄의 정체**와 **추가가 안 먹는 함정들**에 초점.
+
+### 어디서 던지나 — 브라우저 차단(#15)과 정반대
+| | Mixed Content (#15) | CORS 403 (이 노트) |
+|---|---|---|
+| 누가 거부 | **브라우저** (요청 전) | **서버** (요청 받고 응답으로) |
+| 서버 로그 | 0줄 (요청이 안 떠남) | **남음** (서버까지 도달 → 403 응답) |
+| 진단 단서 | "서버에 흔적 없음" | "서버가 403 을 *준다*" |
+
+→ FE 가 "서버까지 도달하지만 403" 이라고 보고한 게 정확히 이 신호. 서버가 응답을 *생성*했으니 Mixed Content(#15)가 아니라 CORS 거부다. 내부적으로 Spring 의 `DefaultCorsProcessor` 가 Origin 불일치 시 `rejectRequest()` 로 403 + 빈 본문을 쓴다(우리 앱은 본문이 `Invalid CORS request`).
+
+### 핵심 함정 — origin 은 "정확한 문자열" 이어야 한다
+브라우저가 붙이는 `Origin` 헤더는 **`scheme://host[:port]` 형태뿐** — 경로도, 끝 슬래시도 없다. allowlist 엔 이것과 **글자 단위로 같은** 값이 있어야 한다.
+
+| allowlist 에 적은 값 | 브라우저 Origin `https://moo-diary-ten.vercel.app` 와 매칭? |
+|---|---|
+| `https://moo-diary-ten.vercel.app` | ✅ 일치 |
+| `https://moo-diary-ten.vercel.app/` | ❌ 끝 슬래시 불일치 |
+| `http://moo-diary-ten.vercel.app` | ❌ scheme(https↔http) 불일치 |
+| `moo-diary-ten.vercel.app` | ❌ scheme 누락 |
+| `https://moo-diary-ten.vercel.app/api/auth/login` | ❌ 경로 포함 불일치 |
+
+`setAllowedOrigins(...)` 는 **정확 일치**, 와일드카드(`*.vercel.app`)가 필요하면 `setAllowedOriginPatterns(...)` 를 써야 한다. 단 와일드카드 `*` 는 `allowCredentials=true` 와 충돌(브라우저가 거절)해서 우리는 정확 URL 만 쓰는 정책([12번](#12-cors--same-origin-policy--브라우저-차단-메커니즘--preflight--allowlist-vs-와일드카드) 참조). → Vercel **프리뷰 배포**(`...-git-브랜치-xxx.vercel.app`)는 production 과 다른 호스트라 **별도 origin 으로 추가**해야 한다.
+
+### 두 번째 함정 — allowlist 를 env 로 외부화 → "환경변수 운영" 의 덫
+허용 origin 을 코드에 하드코딩하지 않고 `APP_CORS_ALLOWED_ORIGINS` (콤마 구분) 로 빼면, 운영 origin 변경에 **재배포·코드 변경이 필요 없다**(EC2 `.env` 수정 + 컨테이너 재생성으로 끝). CD 가 `.env` 를 덮어쓰지 않아 값이 영속. 대신 env 운영 특유의 함정 2개:
+
+1. **`.env` 에 키가 *없으면* 조용히 기본값으로 동작** — `compose.yaml` 의 `${APP_CORS_ALLOWED_ORIGINS:-http://localhost...}` 처럼 `:-` default 가 있으면, 키 누락 시 에러 없이 **localhost 만 허용** → 운영 origin 전부 차단되는데 로그엔 아무 경고도 없다. "빈 값 ≠ 미설정" 의 또 다른 얼굴.
+2. **쉘 프롬프트에 `KEY=val` 친 건 파일 수정이 아니다** — 터미널에서 `APP_CORS_ALLOWED_ORIGINS=...` 를 그냥 엔터 치면 그 **세션에만 사는 쉘 변수**가 만들어질 뿐 `.env` 파일은 그대로다. 파일에 넣으려면 `echo 'KEY=val' >> .env` 또는 에디터로 써야 한다.
+3. **env 는 컨테이너 *시작 시점*에만 읽힌다** — `.env` 를 고쳐도 돌고 있는 컨테이너는 옛 값을 들고 있다. `docker-compose up -d` 로 재생성해야 반영.
+
+### 검증 한 방 — preflight 모사
+```bash
+curl -i -X OPTIONS http://localhost:8080/api/auth/login \
+  -H "Origin: https://moo-diary-ten.vercel.app" \
+  -H "Access-Control-Request-Method: POST"
+# 응답에 Access-Control-Allow-Origin: https://moo-diary-ten.vercel.app 가 있으면 통과
+```
+
+### 발표 / Q&A 한 줄
+> "`403 Invalid CORS request` 는 브라우저가 아니라 서버가 던지는 거부예요. Origin 헤더가 서버 허용 목록과 **정확한 문자열로 일치**해야 하는데 — scheme·끝 슬래시까지 — 그래서 origin 만 EC2 `.env` 의 `APP_CORS_ALLOWED_ORIGINS` 에 추가하고 컨테이너를 재생성해서 풀었습니다. 허용 목록을 코드가 아니라 환경변수로 외부화해서 재배포 없이 운영에서 origin 을 관리합니다."
+
+### 청중 Q&A 대비
+**Q. 이것도 브라우저가 막는 CORS 아닌가요?**
+> CORS 의 *판단*은 브라우저가 하지만, `403 Invalid CORS request` 응답 자체는 **서버가 생성**한다. preflight(OPTIONS)나 실제 요청이 서버에 도달했고, 서버가 Origin 을 보고 "허용 안 됨" 으로 403 을 돌려준 것. 그래서 서버 로그에 흔적이 남는다 — 흔적이 0줄이면 그건 Mixed Content(#15) 쪽.
+
+**Q. `https://...app` 와 `https://...app/` 가 정말 다르게 취급되나요?**
+> 네. allowlist 매칭은 정규식·prefix 가 아니라 **정확 문자열 비교**. 브라우저 Origin 헤더엔 끝 슬래시·경로가 절대 안 붙으므로, allowlist 에 슬래시를 붙이면 영원히 불일치. 가장 흔한 "추가했는데 왜 안 되지" 원인.
+
+**Q. 왜 코드에 안 박고 환경변수로 뺐나요?**
+> origin 은 환경(로컬/운영/FE 호스팅 변경)마다 다른 **운영 설정**이지 비즈니스 로직이 아니다. 외부화하면 FE 가 S3→Vercel 로 바꿔도 BE 코드·재배포 없이 `.env` 한 줄로 대응. 12-factor 의 "config 를 코드에서 분리" 원칙.
+
+### 코드 위치 — 이 프로젝트
+- `src/main/java/hoseo/moodiary/config/CorsConfig.java` — `setAllowedOrigins` + `APP_CORS_ALLOWED_ORIGINS` 외부화 + 와일드카드 금지 주석
+- `src/main/resources/application.yaml` — `app.cors.allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:...}` 플레이스홀더
+- `compose.yaml` — `APP_CORS_ALLOWED_ORIGINS=${APP_CORS_ALLOWED_ORIGINS:-http://localhost...}` (`:-` default 함정의 진원지)
+- `src/test/java/hoseo/moodiary/config/CorsConfigTest.java` — preflight 허용/거부 테스트
+
+### 관련 노트
+- [12번. CORS](#12-cors--same-origin-policy--브라우저-차단-메커니즘--preflight--allowlist-vs-와일드카드) — SOP / preflight / 와일드카드 vs allowCredentials 의 원리. 이 노트는 그 원리가 만든 `403` 메시지와 운영 함정 편.
+- [15번. Mixed Content](#15-mixed-content--https-페이지의-http-api-호출은-브라우저가-요청-전에-차단-vercel-rewrites-가-빠른-해결책) — "서버 로그 0줄 vs 403 이 옴" 으로 둘을 가르는 진단. FE 가 Vercel 로 가며 Mixed Content 를 먼저 풀자 그 다음에 이 CORS 403 이 드러난 순서.
+- [6번. dev 와 main](#6-dev-와-main-의-의미--왜-dev-머지로는-운영-반영-안-되나) — "환경변수·인프라 설정은 코드 머지와 별개 채널" 이라는 같은 결.
+
+---
+
 ## 🔄 누적 갱신
 
 이 문서는 **새로운 질문 / 학습이 생길 때마다 추가**된다. 본인이 모르는 걸 묻고 알게 된 모든 기술 개념을 한 곳에 누적.
@@ -1627,3 +1699,4 @@ ALTER TABLE post MODIFY COLUMN post_content TEXT;
 | 2026-05-29 | 14번 추가 — Silent catch 의 두 얼굴 (의도적 침묵 vs 운영 사고) + 메트릭 채널. T-033 sweep 직후 사용자의 "JwtFilter 의 의도적 침묵이 뭐냐" 발화로 트리거. **Volume × 가시성 trade-off 매트릭스** 라는 일반화 가능한 분류 박음. 발표 / Q&A 의 "로그 어떻게 관리?" / "관찰성 (observability) 어떻게?" / "보안 이벤트 추적?" 답할 토대. 일반화 가능성 매우 높음 — 다음 묶음 임계 도달 시 goospel.github.io 승격 후보. |
 | 2026-05-29 | 15번 추가 — Mixed Content (HTTPS 페이지의 HTTP API 호출을 브라우저가 *요청 전에* 차단) + FE reverse-proxy (Vercel rewrites) 패턴. FE 가 S3 대신 Vercel 배포 시도하면서 자동 HTTPS ↔ EC2 HTTP 충돌로 발견. **EC2 로그에 0줄** 이 결정적 진단 단서. plan.md 의 "프론트 = S3 only" 결정이 의존하던 가정 (S3 = HTTP) 이 Vercel 자동 HTTPS 와 충돌해 깨짐 — "결정 + 의존 가정" 명시 일반 교훈도 박음. 일반화 가능성 매우 높음 (Vercel/Netlify/Cloudflare Pages 어디서나 같은 패턴) — **13 + 14 + 15 = 3개 묶음 임계 도달, 다음 release 직후 goospel.github.io 승격 후보**. |
 | 2026-06-09 | 16번 추가 — JPA `String` 컬럼 기본 `VARCHAR(255)` 함정 + `ddl-auto:update` 가 기존 컬럼 타입을 안 바꿈. FE 의 "여러 줄 일기 저장 500" 버그 제보를 `@DataJpaTest` 로 재현해 길이 초과(줄바꿈 무관)로 확정. `TEXT` 확장 + `@Size` 두 겹 방어 + 운영 수동 ALTER. [T-036](./troubleshooting.md#t-036). 일반화 가능성 높음 (JPA/Hibernate 쓰는 모든 프로젝트의 본문성 필드 공통 함정) — **다음 묶음(16+...)으로 goospel.github.io 승격 후보**. |
+| 2026-06-11 | 17번 추가 — `403 Invalid CORS request` 의 정체 (브라우저 아닌 **서버**가 던지는 거부 + Origin **정확 문자열** 매칭 + allowlist env 외부화 함정). FE 가 Vercel 배포 후 "서버까지 도달하지만 403" 보고 → EC2 `.env` 의 `APP_CORS_ALLOWED_ORIGINS` 에 Vercel origin 추가로 해소하며 정리. #12(CORS 원리)·#15(Mixed Content)와 "서버 로그 0줄 vs 403 옴" 진단 축으로 연결. env 함정 2건(키 누락 시 `:-` default 조용히 / 쉘 `KEY=val` 은 파일 아님)도 박음. 일반화 가능성 높음 — **다음 묶음으로 goospel.github.io 승격 후보**. |
