@@ -26,7 +26,7 @@ import java.util.UUID;
  * <ol>
  *   <li>{@code POST /post} 가 일기 저장과 같은 트랜잭션에 {@code AiResponse(PENDING)} row 를 만든다.</li>
  *   <li>컨트롤러가 commit 후 {@code @Async} 메서드로 추론을 트리거.</li>
- *   <li>성공: {@link #markDone(String, String)}. 실패: {@link #markFailed(String)}.</li>
+ *   <li>성공: {@link #markDone(String, String, String)}. 실패: {@link #markFailed(String)}.</li>
  * </ol>
  *
  * <p><b>관계</b>: {@link Post} 와 단방향 1:1. {@code post_id} 에 unique 제약을 걸어 한 글당 한 응답만.
@@ -35,8 +35,8 @@ import java.util.UUID;
  *
  * <p><b>스키마</b>: {@code ddl-auto: update} 는 unique 제약 자동 생성을 보장하지 않으므로
  * {@code @Table(uniqueConstraints=...)} 에 명시. 운영 머지 후 {@code SHOW INDEX FROM ai_response;} 로 확인.
- *
- * <p><b>인코딩</b>: {@code emoji} 컬럼은 utf8mb4 가 필수 (RDS {@code character_set_database} 확인 — 운영 머지 전 필수).
+ * 또한 {@code update} 는 새 컬럼({@code emotion}/{@code home_comment}) add 만 하고, 기존 {@code emoji}
+ * 컬럼을 자동 drop 하지 않는다 — 남아도 무해(미사용)하며, 정리하려면 운영에서 수동 {@code ALTER ... DROP COLUMN}.
  */
 @Entity
 @Table(
@@ -63,8 +63,13 @@ public class AiResponse extends BaseEntity {
     @Column(name = "ai_response_content", columnDefinition = "TEXT")
     private String content;
 
-    @Column(name = "ai_response_emoji")
-    private String emoji;
+    /** 감정 라벨 (예: {@code "neutral"}). AI 서버 응답 {@code emotion}. */
+    @Column(name = "ai_response_emotion")
+    private String emotion;
+
+    /** 홈화면에 보여줄 짧은 문장. AI 서버 응답 {@code homeComment}. */
+    @Column(name = "ai_response_home_comment", columnDefinition = "TEXT")
+    private String homeComment;
 
     @Column(name = "ai_response_error_message")
     private String errorMessage;
@@ -76,10 +81,11 @@ public class AiResponse extends BaseEntity {
     }
 
     /** PENDING → DONE 전이. */
-    public void markDone(String content, String emoji) {
+    public void markDone(String content, String emotion, String homeComment) {
         this.status = AiResponseStatus.DONE;
         this.content = content;
-        this.emoji = emoji;
+        this.emotion = emotion;
+        this.homeComment = homeComment;
     }
 
     /** PENDING → FAILED 전이. */

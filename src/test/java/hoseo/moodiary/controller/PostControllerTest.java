@@ -428,7 +428,7 @@ class PostControllerTest {
     class AiResponsePolling {
 
         @Test
-        @DisplayName("PENDING 이면 200 + content/emoji 가 JSON 에서 null. errorMessage 키는 응답에서 생략")
+        @DisplayName("PENDING 이면 200 + content/emotion/homeComment 가 JSON 에서 null. errorMessage 키는 응답에서 생략")
         void pending() throws Exception {
             UUID id = UUID.randomUUID();
             given(aiResponseService.getByPostId(USER_ID, id)).willReturn(
@@ -441,12 +441,13 @@ class PostControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("PENDING"))
                     .andExpect(jsonPath("$.content").value(nullValue()))
-                    .andExpect(jsonPath("$.emoji").value(nullValue()))
+                    .andExpect(jsonPath("$.emotion").value(nullValue()))
+                    .andExpect(jsonPath("$.homeComment").value(nullValue()))
                     .andExpect(jsonPath("$.errorMessage").doesNotExist());
         }
 
         @Test
-        @DisplayName("DONE 이면 200 + content/emoji 채워져 있음. errorMessage 키는 응답에서 생략")
+        @DisplayName("DONE 이면 200 + content/emotion/homeComment 채워져 있음. errorMessage 키는 응답에서 생략")
         void done() throws Exception {
             UUID id = UUID.randomUUID();
             given(aiResponseService.getByPostId(USER_ID, id)).willReturn(
@@ -454,19 +455,21 @@ class PostControllerTest {
                             .postId(id)
                             .status(AiResponseStatus.DONE)
                             .content("AI 본문")
-                            .emoji("😊")
+                            .emotion("happy")
+                            .homeComment("좋은 하루였네요!")
                             .build());
 
             mockMvc.perform(get("/post/{id}/ai-response", id).with(asUser(USER_ID)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("DONE"))
                     .andExpect(jsonPath("$.content").value("AI 본문"))
-                    .andExpect(jsonPath("$.emoji").value("😊"))
+                    .andExpect(jsonPath("$.emotion").value("happy"))
+                    .andExpect(jsonPath("$.homeComment").value("좋은 하루였네요!"))
                     .andExpect(jsonPath("$.errorMessage").doesNotExist());
         }
 
         @Test
-        @DisplayName("FAILED 면 200 + errorMessage 가 응답에 포함, content/emoji 는 null")
+        @DisplayName("FAILED 면 200 + errorMessage 가 응답에 포함, content/emotion/homeComment 는 null")
         void failed() throws Exception {
             UUID id = UUID.randomUUID();
             given(aiResponseService.getByPostId(USER_ID, id)).willReturn(
@@ -480,7 +483,8 @@ class PostControllerTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.status").value("FAILED"))
                     .andExpect(jsonPath("$.content").value(nullValue()))
-                    .andExpect(jsonPath("$.emoji").value(nullValue()))
+                    .andExpect(jsonPath("$.emotion").value(nullValue()))
+                    .andExpect(jsonPath("$.homeComment").value(nullValue()))
                     .andExpect(jsonPath("$.errorMessage").value("AI 서버 응답 시간 초과"));
         }
 

@@ -1,7 +1,7 @@
 # Moodiary Backend — Roadmap
 
 > 백엔드 작업의 **현재 위치 + 다음 경로**. PR 머지 시 갱신.
-> 마지막 갱신: 2026-06-11 (FE 가 **Vercel** 배포 → EC2 `.env` 의 `APP_CORS_ALLOWED_ORIGINS` 에 Vercel origin 추가로 `403 Invalid CORS request` 해소. 코드/PR 변경 없는 운영 설정. 그 전: 긴 일기 본문 500 fix (VARCHAR(255)→TEXT), AI 서버 HTTP 어댑터 PR 4-final.)
+> 마지막 갱신: 2026-06-12 (**AI 서버 실연동 계약 확정** — AI 배포됨(HF Space), 어댑터를 `/chat` 계약으로 맞춤: 요청 `{user_text, recent_emotions:"", diary_date}` → 응답 `{emotion, aiText, homeComment}`. 폴링 DTO `emoji`→`emotion`+`homeComment` (**FE 계약 변경**). 운영 활성화는 `AI_*` env 주입 + FE 통보만 남음. 그 전: FE Vercel 배포 + CORS origin 추가, 긴 본문 500 fix.)
 >
 > 📚 **상세는 다른 문서로 위임**:
 > - [`api-contracts.md`](./api-contracts.md) — API 명세 (request/response/예시/외부 AI 계약)
@@ -20,8 +20,8 @@
 | **운영 URL** | http://15.165.95.129:8080 (Elastic IP, 고정) |
 | **운영 반영** | Post CRUD + 인증 (회원가입 / JWT 로그인 / Refresh Token rotation / **Google OAuth2 소셜 로그인**) + 소유권 + PR 4-pre 비동기 AI 골격 (Stub) + **MkDocs 문서 사이트 (`/docs/`)** |
 | **dev 에만** | Calendar API (emoji=null 임시) |
-| **외부 대기** | PR 4-final 활성화 (AI 서버 배포 + URL/필드명 확정 — 어댑터는 구현 완료) |
-| **다음 핵심 경로** | PR 8 통합 검증 (FE Vercel 배포됨 + CORS 연결 ✅, 전 플로우 검증만 남음) ‖ PR 4-final 활성화 (AI 서버 대기) → PR 5 후속 (emoji JOIN) → PR 6 (Flyway baseline) |
+| **외부 대기** | (없음) — AI 서버 배포됨, 어댑터 `/chat` 계약 확정. 운영 활성화는 우리 측 env 주입 + FE 통보. |
+| **다음 핵심 경로** | AI `/chat` 어댑터 dev 머지 → 운영 `AI_*` env 주입 + `AI_CLIENT_MODE=http` 전환 + FE 응답 필드(`emotion`/`homeComment`) 통보 ‖ PR 8 통합 검증 (FE Vercel + CORS ✅) → PR 5 후속 (emotion JOIN) → PR 6 (Flyway baseline) |
 | **스택** | Java 25 / Spring Boot 4.0.6 / EC2 + RDS MySQL 9 |
 
 ---
@@ -50,7 +50,7 @@
 
 | PR | 상태 | 대기 사유 |
 |---|---|---|
-| **PR 4-final** — AI HTTP 어댑터 + WireMock | 🟢 어댑터 구현됨 (토글 뒤) | 코드/테스트 완료(`ai.client.mode=http`). **활성화 대기** = AI 서버 배포 + URL/필드명/인증 확정 ([api-contracts.md#합의-항목-체크리스트](./api-contracts.md#합의-항목-체크리스트)). 운영 기본값 stub. |
+| **PR 4-final** — AI HTTP 어댑터 (`/chat` 실계약) | 🟢 구현 + 계약 확정 | 코드/테스트 완료(`ai.client.mode=http`). AI 서버 배포됨(HF Space), `/chat` 계약 확정 ([api-contracts.md#ai-추론-서버](./api-contracts.md#ai-추론-서버)). **운영 활성화** = `AI_*` env 주입 + `http` 전환 + FE 통보. 운영 기본값 stub. |
 | **PR 5** — Calendar API (`GET /calendar?year=YYYY&month=MM`) | 🟡 85% | dev 머지 완료. emoji LEFT JOIN + `(user_id, created_at)` 인덱스는 PR 4-final 후 후속 PR |
 | **PR 8 후반** — 프론트 통합 검증 (Vercel) | 🟡 70% | FE 가 S3 대신 **Vercel** 배포 ✅ + BE CORS origin 추가 ✅ (Mixed Content 해소 + `403 Invalid CORS request` 해소). 회원가입 / 로그인 / 일기 CRUD / 캘린더 + **OAuth2** 전 플로우 통합 검증만 남음. |
 
@@ -72,10 +72,10 @@ PR 7 (ECS 이전)           ── 먼 미래, HTTPS/도메인 도입 시
 > 각 PR 의 **구현 체크리스트 / 위험 / 운영 머지 전 필수 항목**은 해당 PR 시작 시점에 PR body 에 작성한다.
 > plan.md 는 "무엇 / 왜 / 의존" 까지만.
 
-### PR 4-final — AI 비동기 응답 실어댑터 🤖 ⭐⭐⭐ — **어댑터 구현됨 (토글 뒤), 활성화 대기**
-**완료**: `AiResponseClient` interface 추출 + `StubAiResponseClient`/`HttpAiResponseClient`(`RestClient`) + `ai.client.mode` 토글 + WireMock 7케이스. 요청 `{userId,postId,title,content}` → 응답 `{message,emoji}`. 실패는 상위 `RestClientException` 으로 catch (T-035).
-**활성화 남은 일** (AI 서버 실체화 시): ① `AI_SERVER_URL`/필드명 확정 ② 인증 합의 시 헤더 추가 ③ EC2 `.env` + GitHub Secrets 에 `AI_CLIENT_MODE=http` + `AI_SERVER_URL`(+인증) 주입 ④ Retry(5xx) 도입 여부 결정.
-**의존**: PR 4-pre ✅. **잠정 계약** — AI 서버 미배포라 운영은 stub 유지.
+### PR 4-final — AI 비동기 응답 실어댑터 🤖 ⭐⭐⭐ — **구현 + `/chat` 계약 확정, 운영 활성화 대기**
+**완료**: `AiResponseClient` interface + `StubAiResponseClient`/`HttpAiResponseClient`(`RestClient`) + `ai.client.mode` 토글 + WireMock. AI 서버 배포됨(HF Space) → **`/chat` 실계약 확정**: 요청 `{user_text, recent_emotions:"", diary_date("M월 d일")}` → 응답 `{emotion, aiText, homeComment, diaryDate}`. 폴링 DTO `emoji`→`emotion`+`homeComment` (FE 계약 변경). `invoke` 시그니처 `(postId, content, diaryDate)` 로 단순화 (userId/title 제거). timeout 기본 30s (HF cold start). 실패는 상위 `RestClientException` 으로 catch (T-035).
+**운영 활성화 남은 일**: ① compose.yaml + EC2 `.env` + GitHub Secrets 에 `AI_CLIENT_MODE=http` + `AI_SERVER_URL=https://dlqudwn153-moo-diary-ai-prompt.hf.space` + `AI_TIMEOUT_MS` 주입 (compose 줄은 이 PR 에 추가됨) ② FE 에 응답 필드 `emoji→emotion+homeComment` 통보 ③ 운영 DB 새 컬럼(`emotion`/`home_comment`) `ddl-auto:update` 자동 add 확인.
+**의존**: PR 4-pre ✅. AI 서버 배포 완료 — 잠정 계약 → 확정.
 
 ### PR 5 후속 — Calendar emoji JOIN 📅 ⭐⭐
 **Why**: PR 5 가 emoji=null 로 우회됐던 거 채움. `AiResponse` LEFT JOIN 으로 일자별 이모지 매핑.
@@ -164,6 +164,7 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 
 | 일자 | 변경 |
 |---|---|
+| 2026-06-12 | **AI 서버 실연동 — `/chat` 계약 맞춤 (PR 4-final 완성)** — AI 배포됨(Hugging Face Space). 어댑터를 실계약으로 재작성: 요청 `{user_text, recent_emotions:"", diary_date}` → 응답 `{emotion, aiText, homeComment, diaryDate}`. `AiResponse` 엔티티 `emoji`→`emotion`+`homeComment` 컬럼 교체, 폴링 DTO/서비스/테스트 전부 갱신. `invoke(postId, content, diaryDate)` 시그니처 단순화. `diary_date` 는 `"M월 d일"` 포맷, `recent_emotions` 빈 문자열 고정(AI 담당자 합의). timeout 기본 10s→30s. compose.yaml 에 `AI_*` env 3개 추가. **운영 머지 전 필수**: ① EC2 `.env` + GitHub Secrets 에 `AI_CLIENT_MODE=http`/`AI_SERVER_URL`/`AI_TIMEOUT_MS` ② **FE 에 응답 필드 `emoji`→`emotion`+`homeComment` 통보**. |
 | 2026-06-11 | **FE Vercel 배포 → CORS Vercel origin 추가 (운영 설정, 코드/PR 변경 없음)** — FE 가 S3 대신 **Vercel**(`https://moo-diary-ten.vercel.app`)에 배포. Mixed Content 해소 후 `/api/auth/login` 이 서버에 도달하지만 `403 Invalid CORS request` (허용 origin 미등록). EC2 `.env` 의 `APP_CORS_ALLOWED_ORIGINS` 에 Vercel origin 추가 + `sudo docker-compose up -d` 재생성으로 해소. allowlist 는 `CorsConfig` (`src/main/java/hoseo/moodiary/config/CorsConfig.java`) 가 env 외부화 → **코드/PR 변경 없음**, CD 가 `.env` 를 안 덮어써서 영속. 함정 2건: ① `.env` 에 키가 원래 없어 compose `:-` default(localhost)로 조용히 동작 → 운영 origin 전부 차단, ② 쉘 프롬프트에 `KEY=val` 입력은 파일 수정이 아니라 세션 변수라 무효 (`echo '...' >> .env` 로 써넣어야 함). |
 | 2026-06-09 | **fix: 긴 일기 본문 저장 시 500 (FE 버그 제보)** — `Post.content` 가 length 미지정이라 JPA 기본 `VARCHAR(255)` 매핑 → 256자+ (특히 여러 줄) 본문이 `Data too long` → generic 500. **줄바꿈 무관, 길이가 원인**. 컬럼 `columnDefinition="TEXT"` + DTO `@Size`(title 255 / content 10000)로 binding 단계 400. 회귀 테스트 `PostContentLengthTest`(@DataJpaTest) + 컨트롤러 400 테스트. [T-036](./troubleshooting.md#t-036). **운영 머지 전 필수**: `ALTER TABLE post MODIFY COLUMN post_content TEXT;` (`ddl-auto:update` 가 기존 컬럼 타입 변경 안 함). |
 | 2026-06-09 | **AI 서버 HTTP 어댑터 구현 (PR 4-final)** — `AiResponseClient` 인터페이스화 + `StubAiResponseClient`(기본)/`HttpAiResponseClient` + `ai.client.mode` 토글(OAuth2 패턴). 요청에 `userId` 추가 (`{userId,postId,title,content}` → `{message,emoji}`). `application.yaml` 에 `ai.*` 블록(client.mode/server.url/timeout-ms). WireMock 테스트 7케이스. 실패 catch 는 상위 `RestClientException` 으로 ([T-035](./troubleshooting.md#t-035)). **AI 서버 미배포 → 운영 기본값 stub 유지, 인증 보류, 계약 잠정.** 스키마 변경 없음. |

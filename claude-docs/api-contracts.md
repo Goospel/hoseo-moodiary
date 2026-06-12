@@ -39,7 +39,7 @@
   - [AI Response (🚧 Stub — PR 4-pre)](#ai-response--stub--pr-4-pre)
     - [GET /post/{id}/ai-response](#get-postidai-response)
 - [외부 시스템 계약](#외부-시스템-계약)
-  - [AI 추론 서버 (PR 4-final)](#ai-추론-서버-pr-4-final)
+  - [AI 추론 서버](#ai-추론-서버)
 
 ---
 
@@ -539,9 +539,9 @@ GET /calendar?year=2026&month=5
 
 ### AI Response (🚧 Stub — PR 4-pre)
 
-> 🚧 **운영 기본값 = Stub 모드** (`ai.client.mode=stub`): 실제 AI 서버 호출 없이 고정 응답 (`emoji: "😊"`) 을 즉시 반환. `POST /post` 직후 거의 즉시 `DONE` 으로 전이되어 폴링 한 번이면 결과 도달.
+> 🚧 **운영 기본값 = Stub 모드** (`ai.client.mode=stub`): 실제 AI 서버 호출 없이 고정 응답을 즉시 반환. `POST /post` 직후 거의 즉시 `DONE` 으로 전이되어 폴링 한 번이면 결과 도달.
 >
-> **PR 4-final — HTTP 어댑터 구현됨** (`ai.client.mode=http`): `HttpAiResponseClient` 가 `{AI_SERVER_URL}/inference` 로 POST + 타임아웃 + 4xx/5xx/파싱실패 → FAILED. **AI 서버 미배포 상태라 토글은 아직 stub** — 외부 계약은 [아래 외부 시스템 계약 섹션](#ai-추론-서버-pr-4-final) (잠정) 참조. AI 서버 실체화 시 URL/필드명/인증만 맞추고 `AI_CLIENT_MODE=http` 로 전환.
+> **HTTP 어댑터 구현됨** (`ai.client.mode=http`): `HttpAiResponseClient` 가 `{AI_SERVER_URL}/chat` 으로 POST + 타임아웃 + 4xx/5xx/파싱실패 → FAILED. **AI 서버 배포됨** (Hugging Face Space) — 외부 계약은 [아래 외부 시스템 계약 섹션](#ai-추론-서버) 참조. 운영 전환은 `AI_CLIENT_MODE=http` + `AI_SERVER_URL` 설정.
 
 #### `GET /post/{id}/ai-response`
 사용자가 일기를 작성하면 즉시 `POST /post` 가 201 을 반환하고, **AI 응답은 비동기로 처리**된다. 프론트는 이 엔드포인트를 폴링해서 완료 여부를 확인.
@@ -561,7 +561,8 @@ Authorization: Bearer <accessToken>
   "postId": "9c4d401e-...",
   "status": "PENDING",
   "content": null,
-  "emoji": null
+  "emotion": null,
+  "homeComment": null
 }
 ```
 
@@ -571,22 +572,26 @@ Authorization: Bearer <accessToken>
   "postId": "9c4d401e-...",
   "status": "DONE",
   "content": "오늘 기분이 좋으셨군요! 그 순간을 더 자세히 떠올려보세요.",
-  "emoji": "😊"
+  "emotion": "happy",
+  "homeComment": "좋은 하루였네요!"
 }
 ```
 
-`status: FAILED` — 추론 실패. `content / emoji` 는 null, `errorMessage` 에 사유.
+`status: FAILED` — 추론 실패. `content / emotion / homeComment` 는 null, `errorMessage` 에 사유.
 ```json
 {
   "postId": "9c4d401e-...",
   "status": "FAILED",
   "content": null,
-  "emoji": null,
+  "emotion": null,
+  "homeComment": null,
   "errorMessage": "AI 서버 응답 시간 초과"
 }
 ```
 
-**필드 명시 정책**: `errorMessage` 는 `FAILED` 일 때만 응답에 포함된다 (`@JsonInclude(NON_NULL)`). `PENDING / DONE` 응답에는 `errorMessage` 키 자체가 없다. `content / emoji` 는 비대칭 없이 모든 상태에서 키가 있고 null 일 수 있음.
+**필드 명시 정책**: `errorMessage` 는 `FAILED` 일 때만 응답에 포함된다 (`@JsonInclude(NON_NULL)`). `PENDING / DONE` 응답에는 `errorMessage` 키 자체가 없다. `content / emotion / homeComment` 는 비대칭 없이 모든 상태에서 키가 있고 null 일 수 있음.
+
+> ⚠️ **FE 계약 변경 (2026-06-12)**: 기존 `emoji`(😊 유니코드) 필드가 **제거**되고 `emotion`(감정 라벨, 예 `"happy"`) + `homeComment`(홈화면 문장) 로 교체됨. AI 서버(`/chat`) 응답 구조에 맞춤.
 
 **에러**
 - `401` — 인증 누락/실패
@@ -601,56 +606,57 @@ Authorization: Bearer <accessToken>
 
 > 우리가 **호출하는** 서버의 API. Swagger에는 안 나옴. 여기서 합의 → 변경 시 양쪽 동기화.
 
-### AI 추론 서버 (PR 4-final)
+### AI 추론 서버
 
-> 🚧 **어댑터 구현됨 (토글 뒤, `ai.client.mode=http`)** — `HttpAiResponseClient`. 단, AI 서버가 아직 미배포 + 응답 형태 미확정이라 아래 계약은 **우리 측 잠정 제안**. 운영 기본값은 `stub`이라 영향 없음. AI 담당자 합의 후 필드명/URL/인증 확정.
+> ✅ **배포됨** — Hugging Face Space. `HttpAiResponseClient` (`ai.client.mode=http`) 가 호출. 운영 기본값은 `stub`이라 `AI_CLIENT_MODE=http` + `AI_SERVER_URL` 설정 시 활성.
+> - Base URL: `https://dlqudwn153-moo-diary-ai-prompt.hf.space`
+> - Swagger: `/docs`
+> - 인증: 없음 (공개 Space)
 
 #### 우리가 보낼 요청
 ```http
-POST {AI_SERVER_URL}/inference
+POST {AI_SERVER_URL}/chat
 Content-Type: application/json
-# 인증: 현 단계 보류(헤더 없음). AI 서버 실체화 시 합의 후 추가.
 
 {
-  "userId":  "f1e2d3c4-...",
-  "postId":  "9c4d401e-...",
-  "title":   "오늘의 기분",
-  "content": "오늘은 기분이 좋았다. 친구를 만나서..."
+  "user_text": "오늘은 기분이 좋았다. 친구를 만나서...",
+  "recent_emotions": "",
+  "diary_date": "6월 11일"
 }
 ```
 
-- `userId` (string/UUID) — 작성자 식별. AI 서버가 사용자 단위 컨텍스트/식별에 사용.
-- `postId` (string/UUID) — 게시글 식별.
-- `title`, `content` (string) — 일기 제목/내용.
+- `user_text` (string, required) — 일기 본문. **빈 문자열 금지** (우리 측 `@NotBlank` 로 입구에서 차단).
+- `recent_emotions` (string) — 최근 감정 요약. **현 단계 미사용 → 항상 빈 문자열** (AI 담당자 합의).
+- `diary_date` (string) — 일기 날짜를 `"M월 d일"` 한국어 포맷으로 (예: `"6월 11일"`). 우리 `post.postDate` 를 변환.
 
 #### 우리가 기대하는 응답 (성공)
 ```json
 {
-  "message": "AI가 생성한 응답 텍스트",
-  "emoji": "😊"
+  "emotion": "neutral",
+  "aiText": "AI가 생성한 공감/분석 문장",
+  "homeComment": "홈화면에 보여줄 짧은 문장",
+  "diaryDate": "6월 11일"
 }
 ```
 
-- `message` (string, required) — 사용자 일기에 대한 AI 응답 본문. 우리 DB `ai_response_content` 로 매핑.
-- `emoji` (string, required) — **유니코드 이모지 1자**. 사용자의 기분을 나타냄.
+- `aiText` (string, required) — 사용자 일기에 대한 AI 공감/분석 본문. 우리 DB `ai_response_content` 로 매핑.
+- `emotion` (string, required) — 감정 라벨 (예: `"neutral"`, `"happy"`). DB `ai_response_emotion`.
+- `homeComment` (string) — 홈화면용 짧은 문장. DB `ai_response_home_comment`. 누락 시 빈 문자열로 관용.
+- `diaryDate` (string) — 요청 날짜 에코백. 우리는 사용 안 함 (무시).
 
-#### 합의 항목 (체크리스트)
-- [x] **요청 본문**: `{userId, postId, title, content}` 로 확정 (title 포함).
-- [ ] **URL**: 어디? → 확정 시 `AI_SERVER_URL` env var.
-- [ ] **인증**: 보류 중. 필요해지면 헤더 방식 합의 후 어댑터에 추가 + GitHub Secrets.
-- [ ] **응답 필드명**: 받는 텍스트가 `message` 맞는지(우리 어댑터는 `message`→`content` 매핑 가정). 다르면 어댑터 필드명만 조정.
-- [ ] **응답 시간**: 평균 / p95 / 타임아웃 기준 (현재 `AI_TIMEOUT_MS` 기본 10초).
-- [ ] **이모지 후보 풀**: 닫힌 집합인지(캘린더 UI 일관성) 개방형인지. 예: `😊 😢 😡 😴 😍 🤔 😎 🥰 😭 ...`
-- [ ] **에러 응답 포맷**: 실패 시 HTTP status + body 모양 (현재 우리는 4xx/5xx면 본문 무시하고 FAILED).
-- [ ] **레이트 리미트**: 분당 호출 한도?
+> **필수 필드 검증**: `aiText` 또는 `emotion` 누락 시 파싱 실패 → FAILED. `homeComment` 만 없으면 빈 문자열로 진행.
+
+#### 운영 메모
+- **응답 지연**: HF 무료 Space 는 절전(cold start) 후 첫 호출이 느리고, 내부 SAIFEX + 감정 모델 다단계라 응답이 수~수십 초. `AI_TIMEOUT_MS` 기본 **30초** (env 로 조정).
+- **env**: `AI_CLIENT_MODE`/`AI_SERVER_URL`/`AI_TIMEOUT_MS` → compose.yaml + EC2 `.env` + GitHub Secrets 3곳 동기화 (누락 시 stub/localhost 기본값으로 조용히 동작).
 
 #### 우리 측 실패 처리
 | 시나리오 | 우리 행동 |
 |---|---|
-| 응답 시간 초과 (예: 30초) | `AiResponse.status = FAILED`, `errorMessage = "AI 서버 응답 시간 초과"` |
-| HTTP 5xx 응답 | Spring Retry로 N회 재시도 후 FAILED |
-| HTTP 4xx 응답 | 재시도 없이 FAILED (요청이 잘못된 경우) |
-| 응답 파싱 실패 (필드 누락 등) | FAILED, errorMessage에 파싱 에러 |
+| 응답 시간 초과 (기본 30초) | `AiResponse.status = FAILED`, `errorMessage = "AI 서버 호출 실패: ..."` |
+| HTTP 5xx 응답 | 재시도 없이 FAILED (일시 장애) |
+| HTTP 4xx 응답 | 재시도 없이 FAILED (요청 거절) |
+| 응답 파싱 실패 (`aiText`/`emotion` 누락) | FAILED, errorMessage 에 파싱 에러 |
 
 → **일기 자체는 무조건 저장 성공**. AI 응답 실패는 일기 작성 흐름을 막지 않음.
 
@@ -666,3 +672,4 @@ Content-Type: application/json
 | 2026-05-27 | PR 4-pre 머지. `GET /post/{id}/ai-response` 를 "예정 API" → "구현된 API (🚧 Stub 모드)" 로 이동. Stub 박스 + errorMessage 분기 정책 (`@JsonInclude(NON_NULL)`, FAILED 만 포함) 명시. 엔드포인트 요약 표에 "🚧 Stub" 표시. 외부 시스템 계약 섹션 헤더 "PR 4" → "PR 4-final" 로 명확화. `POST /post` 가 일기 + `AiResponse(PENDING)` 같은 트랜잭션 저장 후 비동기 트리거하는 흐름 추가. |
 | 2026-06-09 | **AI 서버 HTTP 어댑터 (PR 4-final) 구현** — `AiResponseClient` 인터페이스화 + `StubAiResponseClient`/`HttpAiResponseClient` + `ai.client.mode` 토글 (OAuth2 패턴). 외부 계약에 `userId` 추가({userId,postId,title,content} → {message,emoji}), 인증 보류, 잠정 명시. 운영 기본값 stub 유지(AI 서버 미배포). |
 | 2026-06-09 | `GET /post` 정렬/필터 추가. Query Parameters 표 (`from`/`to`/`keyword`/`sort`, 전부 선택) + 기본 `postDate,desc` + 안정 tiebreaker(`createdAt desc → id asc`) 명시. `400` 에러 (잘못된 정렬·범위 역전·날짜 형식) 추가. 엔드포인트 요약 표 Body 칸 갱신. 인덱스 권장 (`post(user_id, post_date)`) 노트. 페이지네이션은 여전히 TODO (도입 시 `Page<>` breaking change). |
+| 2026-06-12 | **AI 서버 실연동 계약 확정 (`/chat`)** — AI 서버 배포됨(Hugging Face Space). 외부 계약 `/inference {userId,postId,title,content} → {message,emoji}` → **`/chat {user_text, recent_emotions:"", diary_date} → {emotion, aiText, homeComment, diaryDate}`**. 폴링 응답 DTO 의 `emoji` → `emotion`+`homeComment` 교체 (**FE 계약 변경**). `recent_emotions` 는 미사용(빈 문자열), `diary_date` 는 `"M월 d일"` 포맷. timeout 기본 10s→30s (HF cold start). 운영 env `AI_*` 3개를 compose+.env+Secrets 에 추가 필요. |
