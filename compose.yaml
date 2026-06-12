@@ -17,6 +17,11 @@
 #                               운영은 반드시 `http`. 누락 시 Stub 동작 → 운영에서도 가짜 토큰 검증. PR 12-final 참조.
 #   GOOGLE_OAUTH_CLIENT_ID    — Google Cloud Console OAuth 2.0 클라이언트 ID (`xxxxx.apps.googleusercontent.com`).
 #                               Google tokeninfo 응답의 audience 검증 (confused deputy 방어) 에 사용. OAUTH2_CLIENT_MODE=http 일 때 필수.
+#   AI_CLIENT_MODE            — AI 어댑터 토글: `stub` (외부 호출 없이 고정 응답, 기본값) / `http` (실제 AI 서버 호출).
+#                               운영은 `http`. 누락 시 stub 동작 → 가짜 AI 응답.
+#   AI_SERVER_URL             — AI 서버 base URL (Hugging Face Space). http 모드에서 {url}/chat 으로 POST.
+#                               운영: https://dlqudwn153-moo-diary-ai-prompt.hf.space . 누락 시 localhost → 호출 실패(FAILED).
+#   AI_TIMEOUT_MS             — AI 호출 connect/read 타임아웃(ms). HF cold start + 감정모델 다단계라 넉넉히 (기본 30000).
 #
 # 운영 갱신 흐름
 # 1) push → main → GitHub Actions CD
@@ -58,3 +63,10 @@ services:
       # 같은 CORS 의 `:-` 패턴 사용 (T-022 기억 — .env 빈 값 ≠ 미설정).
       - OAUTH2_CLIENT_MODE=${OAUTH2_CLIENT_MODE:-stub}
       - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-dummy}
+      # AI 추론 서버 (Hugging Face Space) — 일기 → AI 공감문장/감정/홈코멘트 비동기 호출.
+      # 같은 CORS/OAuth2 의 `:-` 패턴 (T-022 — .env 빈 값 ≠ 미설정).
+      # AI_CLIENT_MODE 가 .env 에 없으면 `stub` → 운영에서도 가짜 고정 응답. 운영은 `http` 필수.
+      # AI_SERVER_URL 누락 시 localhost → http 모드에서 호출 실패(FAILED). HF cold start 대비 timeout 넉넉히.
+      - AI_CLIENT_MODE=${AI_CLIENT_MODE:-stub}
+      - AI_SERVER_URL=${AI_SERVER_URL:-http://localhost:8000}
+      - AI_TIMEOUT_MS=${AI_TIMEOUT_MS:-30000}
