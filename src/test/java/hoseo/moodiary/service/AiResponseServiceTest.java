@@ -21,6 +21,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.lang.reflect.Field;
+import java.time.LocalDate;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -52,6 +53,7 @@ class AiResponseServiceTest {
 
     private static final UUID OWNER_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
     private static final UUID OTHER_USER_ID = UUID.fromString("00000000-0000-0000-0000-000000000002");
+    private static final LocalDate DIARY_DATE = LocalDate.of(2026, 6, 11);
 
     private static User userWithId(UUID id) {
         User user = User.createLocal("a@b.com", "HASHED", "nick");
@@ -60,7 +62,12 @@ class AiResponseServiceTest {
     }
 
     private static Post postWithId(UUID postId, UUID ownerId, String title, String content) {
-        Post post = Post.builder().title(title).content(content).user(userWithId(ownerId)).build();
+        Post post = Post.builder()
+                .title(title)
+                .content(content)
+                .postDate(DIARY_DATE)
+                .user(userWithId(ownerId))
+                .build();
         setField(post, "id", postId);
         return post;
     }
@@ -84,20 +91,21 @@ class AiResponseServiceTest {
     class TriggerAsync {
 
         @Test
-        @DisplayName("어댑터 성공 시 PENDING → DONE 으로 전이하고 content/emoji 를 채운다")
+        @DisplayName("어댑터 성공 시 PENDING → DONE 으로 전이하고 content/emotion/homeComment 를 채운다")
         void success_transitionsToDone() {
             UUID postId = UUID.randomUUID();
             Post post = postWithId(postId, OWNER_ID, "title", "content");
             AiResponse pending = pendingFor(post);
             given(aiResponseRepository.findByPost_Id(postId)).willReturn(Optional.of(pending));
-            given(client.invoke(OWNER_ID, postId, "title", "content"))
-                    .willReturn(new AiInferenceResult("AI 응답 본문", "😊"));
+            given(client.invoke(postId, "content", DIARY_DATE))
+                    .willReturn(new AiInferenceResult("AI 응답 본문", "happy", "홈 코멘트"));
 
             aiResponseService.triggerAsync(postId);
 
             assertThat(pending.getStatus()).isEqualTo(AiResponseStatus.DONE);
             assertThat(pending.getContent()).isEqualTo("AI 응답 본문");
-            assertThat(pending.getEmoji()).isEqualTo("😊");
+            assertThat(pending.getEmotion()).isEqualTo("happy");
+            assertThat(pending.getHomeComment()).isEqualTo("홈 코멘트");
             assertThat(pending.getErrorMessage()).isNull();
         }
 
@@ -109,14 +117,15 @@ class AiResponseServiceTest {
             AiResponse pending = pendingFor(post);
             given(aiResponseRepository.findByPost_Id(postId)).willReturn(Optional.of(pending));
             willThrow(new AiInferenceException("AI 서버 응답 시간 초과"))
-                    .given(client).invoke(OWNER_ID, postId, "title", "content");
+                    .given(client).invoke(postId, "content", DIARY_DATE);
 
             aiResponseService.triggerAsync(postId);
 
             assertThat(pending.getStatus()).isEqualTo(AiResponseStatus.FAILED);
             assertThat(pending.getErrorMessage()).isEqualTo("AI 서버 응답 시간 초과");
             assertThat(pending.getContent()).isNull();
-            assertThat(pending.getEmoji()).isNull();
+            assertThat(pending.getEmotion()).isNull();
+            assertThat(pending.getHomeComment()).isNull();
         }
 
         @Test
@@ -140,7 +149,7 @@ class AiResponseServiceTest {
             UUID postId = UUID.randomUUID();
             Post post = postWithId(postId, OWNER_ID, "title", "content");
             AiResponse done = pendingFor(post);
-            done.markDone("AI 본문", "😊");
+            done.markDone("AI 본문", "happy", "홈 코멘트");
             given(postRepository.findById(postId)).willReturn(Optional.of(post));
             given(aiResponseRepository.findByPost_Id(postId)).willReturn(Optional.of(done));
 
@@ -149,7 +158,8 @@ class AiResponseServiceTest {
             assertThat(result.getPostId()).isEqualTo(postId);
             assertThat(result.getStatus()).isEqualTo(AiResponseStatus.DONE);
             assertThat(result.getContent()).isEqualTo("AI 본문");
-            assertThat(result.getEmoji()).isEqualTo("😊");
+            assertThat(result.getEmotion()).isEqualTo("happy");
+            assertThat(result.getHomeComment()).isEqualTo("홈 코멘트");
             assertThat(result.getErrorMessage()).isNull();
         }
 
@@ -168,7 +178,8 @@ class AiResponseServiceTest {
             assertThat(result.getStatus()).isEqualTo(AiResponseStatus.FAILED);
             assertThat(result.getErrorMessage()).isEqualTo("AI 서버 응답 시간 초과");
             assertThat(result.getContent()).isNull();
-            assertThat(result.getEmoji()).isNull();
+            assertThat(result.getEmotion()).isNull();
+            assertThat(result.getHomeComment()).isNull();
         }
 
         @Test
