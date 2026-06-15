@@ -49,8 +49,8 @@
 
 | 컴포넌트 | 위치 | 역할 |
 |---|---|---|
-| Frontend | (별도 레포) | React + Vite SPA, S3 정적 호스팅 |
-| AI 추론 서버 | (별도 레포) | 일기 텍스트 → 응답 + 이모지 생성, EC2 배포 (PR 4-final 합의 대기) |
+| Frontend | (별도 레포) | React + Vite SPA, **Vercel** 호스팅 (자동 HTTPS) |
+| AI 추론 서버 | (별도 레포) | 일기 텍스트 → 공감문장 + 감정(emotion) + 홈코멘트 생성. **Hugging Face Space** 배포, 운영 실연동 (PR #95 계약 확정) |
 
 ---
 
@@ -61,7 +61,7 @@
 | 언어/런타임 | Java 25 (Amazon Corretto) |
 | 프레임워크 | Spring Boot 4.0.6, Spring Security 6, Spring Data JPA, QueryDSL 5 |
 | 데이터 | MySQL 9.x (운영 RDS, `utf8mb4`), Hibernate 7.2 |
-| 인증 | JWT (jjwt 0.12.6, **HS256**, access 1h) + **Refresh Token (2w, rotation, SHA-256 hash)** + BCrypt |
+| 인증 | JWT (jjwt 0.12.6, **HS256**, access 1h) + **Refresh Token (2w, rotation, SHA-256 hash)** + BCrypt + **Google OAuth2 (token-exchange, `aud` 검증)** |
 | 비동기 | `@EnableAsync` + Spring 기본 `ThreadPoolTaskExecutor` |
 | API 문서 | SpringDoc OpenAPI 3.0.3 (Swagger UI) |
 | 빌드 | Gradle 9, Java 25 toolchain |
@@ -123,7 +123,7 @@ hoseo.moodiary
 11. RefreshTokenService.revoke (idempotent) + FE 가 localStorage 클리어
 ```
 
-### 비동기 AI 응답 흐름 (PR 4-pre 운영 반영)
+### 비동기 AI 응답 흐름 (운영 실연동 — PR #95 계약 확정)
 
 ```
 1. POST /post → PostService.create()
@@ -131,12 +131,15 @@ hoseo.moodiary
    └─ AiResponse(status=PENDING) 같은 트랜잭션에 저장 (정합성 보장)
 2. PostController 가 commit 후 AiResponseService.triggerAsync(postId) 호출 (race free)
 3. @Async 스레드:
-   ├─ AiResponseClient.invoke(...) — 현재 Stub (PR 4-final 시 HTTP 어댑터로 교체)
-   ├─ 성공 → PENDING → DONE + content + emoji
-   └─ AiInferenceException → PENDING → FAILED + errorMessage
+   ├─ AiResponseClient.invoke(...) — 운영은 HttpAiResponseClient 가 AI 서버(HF Space) /chat POST
+   │   요청 { user_text, recent_emotions, diary_date } → 응답 { emotion, aiText, homeComment, diaryDate }
+   ├─ 성공 → PENDING → DONE + content(aiText) + emotion + homeComment
+   └─ AiInferenceException(타임아웃·5xx 등) → PENDING → FAILED + errorMessage
 4. 클라이언트는 GET /post/{id}/ai-response 로 폴링 (소유권 검증)
    응답: status 별 다른 필드 (@JsonInclude(NON_NULL) — errorMessage 는 FAILED 에만)
 ```
+
+> 어댑터 토글: `AI_CLIENT_MODE=stub`(외부 호출 없이 고정 응답, 기본값) / `http`(실 AI 서버). 운영은 `http`.
 
 ---
 
@@ -170,8 +173,9 @@ erDiagram
         UUID ai_response_id PK
         UUID post_id FK_UK "uk_ai_response_post_id"
         enum ai_response_status "PENDING|DONE|FAILED"
-        text ai_response_content
-        string ai_response_emoji
+        text ai_response_content "aiText 공감문장"
+        string ai_response_emotion "감정 라벨 (neutral 등)"
+        text ai_response_home_comment "홈화면 짧은 문장"
         string ai_response_error_message
         datetime created_at
         datetime updated_at
@@ -215,21 +219,16 @@ flowchart LR
         direction LR
         EC2["Spring Boot<br/>Docker on EC2<br/>EIP 15.165.95.129:8080"]
         RDS[("RDS MySQL<br/>moodiary (utf8mb4)")]
-        AI["AI 추론 서버<br/>별도 EC2<br/>PR 4-final 합의 대기"]
     end
 
-    subgraph AWSFE["AWS ap-northeast-1 (FE)"]
-        FE["프론트엔드<br/>S3 정적 호스팅<br/>회신 대기 중"]
-    end
+    FE["프론트엔드<br/>Vercel (HTTPS)"]
+    AI["AI 추론 서버<br/>Hugging Face Space<br/>POST /chat"]
 
-    User -->|HTTP UI| FE
+    User -->|HTTPS UI| FE
     User -->|HTTP Swagger / API| EC2
     FE -.->|fetch + CORS| EC2
     EC2 -->|JDBC| RDS
-    EC2 -.->|RestClient + Retry| AI
-
-    classDef planned stroke-dasharray: 5 5,stroke:#999,color:#666,fill:#f5f5f5
-    class AI,FE planned
+    EC2 -->|RestClient /chat| AI
 ```
 
 ### CI/CD 파이프라인
@@ -279,6 +278,11 @@ flowchart TB
 | `JWT_REFRESH_EXPIRATION_MS` | Refresh token 수명 | `1209600000` (2w) |
 | `APP_CORS_ALLOWED_ORIGINS` | CORS 허용 origin (콤마 구분) | `localhost:3000,localhost:5173` |
 | `SPRING_JPA_HIBERNATE_DDL_AUTO` | Hibernate DDL 모드 | `update` (Flyway 도입 시 `validate`) |
+| `OAUTH2_CLIENT_MODE` | Google OAuth2 검증 모드 (`stub`/`http`) | `stub` (**운영 `http` 필수**) |
+| `GOOGLE_OAUTH_CLIENT_ID` | Google OAuth 2.0 클라이언트 ID (`aud` 검증) | `dummy` (http 모드 시 필수) |
+| `AI_CLIENT_MODE` | AI 어댑터 모드 (`stub`/`http`) | `stub` (**운영 `http` 필수**) |
+| `AI_SERVER_URL` | AI 서버 base URL (`{url}/chat` POST) | `localhost:8000` (운영 HF Space) |
+| `AI_TIMEOUT_MS` | AI 호출 connect/read 타임아웃 | `30000` (HF cold start 대비) |
 
 > ⚠️ **운영 머지 전 필수 체크리스트** — `application.yaml` / `compose.yaml` / DB 스키마 / `.github/workflows/` 등 운영 영향 변경 시 PR body 에 "운영 머지 전 필수" 체크리스트 박는다 ([CLAUDE.md](./CLAUDE.md) 워크플로우 룰).
 
@@ -295,6 +299,7 @@ flowchart TB
 | Refresh Token | 32-byte secure random (URL-safe base64). 2주 수명. **DB 에 SHA-256 hex 만 저장** — raw token 노출 시에도 DB 만으론 복원 불가 |
 | **Refresh Rotation** | `POST /auth/refresh` 시 기존 토큰 즉시 revoke + 새 토큰 발급. 탈취된 refresh 가 한 번만 유효 |
 | 로그아웃 | `POST /auth/logout` 으로 refresh 무효화. Access 는 stateless 라 만료 대기 (1시간). FE 는 localStorage 즉시 클리어 |
+| **Google OAuth2** | token-exchange — FE 가 받은 Google `id_token` 을 BE 가 Google tokeninfo 로 재검증(`aud` = 우리 client-id, `email_verified`) 후 자체 JWT 발급. `OAUTH2_CLIENT_MODE=http` 운영 |
 
 ### 인가
 
