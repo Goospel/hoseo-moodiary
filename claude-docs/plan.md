@@ -1,7 +1,7 @@
 # Moodiary Backend — Roadmap
 
 > 백엔드 작업의 **현재 위치 + 다음 경로**. PR 머지 시 갱신.
-> 마지막 갱신: 2026-06-12 (**AI 서버 실연동 계약 확정** — AI 배포됨(HF Space), 어댑터를 `/chat` 계약으로 맞춤: 요청 `{user_text, recent_emotions:"", diary_date}` → 응답 `{emotion, aiText, homeComment}`. 폴링 DTO `emoji`→`emotion`+`homeComment` (**FE 계약 변경**). 운영 활성화는 `AI_*` env 주입 + FE 통보만 남음. 그 전: FE Vercel 배포 + CORS origin 추가, 긴 본문 500 fix.)
+> 마지막 갱신: 2026-06-15 (**AI `/chat` 실연동 운영 반영 완료** — release #96 으로 운영 활성화(`AI_CLIENT_MODE=http` + `AI_SERVER_URL` HF Space + `AI_TIMEOUT_MS`). 운영에서 일기 작성→`POST /chat`→`emotion`/`aiText`/`homeComment` 저장→폴링 수신 **end-to-end 검증(Postman)**. 남은 건 FE 측 폴링 응답 필드(`emotion`/`homeComment`) 처리. dev→main 충돌은 `-s ours`(전략)로 해결 — `-X ours`(옵션) 함정 회피([T-037](./troubleshooting.md#t-037)).)
 >
 > 📚 **상세는 다른 문서로 위임**:
 > - [`api-contracts.md`](./api-contracts.md) — API 명세 (request/response/예시/외부 AI 계약)
@@ -18,10 +18,10 @@
 | 항목 | 값 |
 |---|---|
 | **운영 URL** | http://15.165.95.129:8080 (Elastic IP, 고정) |
-| **운영 반영** | Post CRUD + 인증 (회원가입 / JWT 로그인 / Refresh Token rotation / **Google OAuth2 소셜 로그인**) + 소유권 + PR 4-pre 비동기 AI 골격 (Stub) + **MkDocs 문서 사이트 (`/docs/`)** |
+| **운영 반영** | Post CRUD + 인증 (회원가입 / JWT 로그인 / Refresh Token rotation / **Google OAuth2 소셜 로그인**) + 소유권 + **비동기 AI 응답 (실 `/chat` 연동, HF Space)** + **MkDocs 문서 사이트 (`/docs/`)** |
 | **dev 에만** | Calendar API (emoji=null 임시) |
-| **외부 대기** | (없음) — AI 서버 배포됨, 어댑터 `/chat` 계약 확정. 운영 활성화는 우리 측 env 주입 + FE 통보. |
-| **다음 핵심 경로** | AI `/chat` 어댑터 dev 머지 → 운영 `AI_*` env 주입 + `AI_CLIENT_MODE=http` 전환 + FE 응답 필드(`emotion`/`homeComment`) 통보 ‖ PR 8 통합 검증 (FE Vercel + CORS ✅) → PR 5 후속 (emotion JOIN) → PR 6 (Flyway baseline) |
+| **외부 대기** | AI `/chat` 운영 반영 완료 ✅ — FE 측 폴링 응답 필드(`emotion`/`homeComment`) 처리만 남음 |
+| **다음 핵심 경로** | AI `/chat` 운영 반영 ✅ + FE 폴링 필드 처리(외부) ‖ PR 8 통합 검증 (FE Vercel + CORS ✅) → PR 5 후속 (캘린더 emotion JOIN — AI 실연동 완료로 진행 가능) → PR 6 (Flyway baseline) |
 | **스택** | Java 25 / Spring Boot 4.0.6 / EC2 + RDS MySQL 9 |
 
 ---
@@ -40,6 +40,7 @@
 | **GitHub Pages** | #53, #68, **#72~#74** | landing + Marp 슬라이드 + **MkDocs Material 문서 사이트 (`/docs/`)** 자동 배포. 트리거 main → **dev** (PR #68) — release 전 반영. PR 9 (#72) 하이브리드 옵션 C 로 learning-notes 가 MkDocs 안으로 흡수됨. T-029/T-030 두 fix iteration (README ↔ index 자동 충돌, outbound 링크 평면화 충돌). |
 | **PR 9 MkDocs (단독)** | #72, #73, #74 | `/docs/` 에 Material 테마 문서 사이트. claude-docs/\* + README 한 곳 검색. 사이트 홈 + 로드맵 + API 명세 + 보안 + 트러블슈팅 + 학습 노트 + 운영 Runbook + README 모두 nav. **strict 빌드 컨벤션 함정 2건 박힘** ([T-029](./troubleshooting.md#t-029) / [T-030](./troubleshooting.md#t-030)). |
 | **AI 응답 골격** | #59 | `AiResponse` 엔티티 + `AiResponseClient` Stub + `@Async` + `GET /post/{id}/ai-response` |
+| **AI `/chat` 실연동 (PR 4-final)** | #90, #95, #96 | HTTP 어댑터(`RestClient`) + `ai.client.mode=http` 토글 → HF Space `/chat` 실호출. 폴링 DTO `emoji`→`emotion`+`homeComment`. 운영 `AI_*` env 주입 + `http` 전환으로 **운영 반영 완료**, Postman end-to-end 검증. dev→main 충돌 `-s ours` 해결 ([T-037](./troubleshooting.md#t-037)). |
 | **학습 파이프라인 (PKM)** | #67, #70 | `learning-notes.md` 신설 (12 항목) + 3개 항목 ([Spring 비동기 / AWS SSM 메커니즘 / CORS](https://goospel.github.io/notes/)) goospel.github.io 공개판 첫 승격 |
 | **PR 12 Google OAuth2 (풀체인)** | #76, #77, #78, #79, #80, #81 | **운영 반영 완료**. token-exchange 패턴 — FE 가 Google Sign-In 으로 id_token 받아 BE 에 POST → BE 가 Google `tokeninfo` 호출 + `aud` (confused deputy 방어) + `email_verified` 검증 → DB 의 (provider, providerId) 조회 → 신규/기존 분기 + JWT 발급. `oauth2.client.mode=stub\|http` 토글로 dev/운영 분리. **Kakao 제외** (졸업프로젝트 범위). `users` 테이블 ALTER 4건 (provider/providerId/password nullable/UNIQUE) 사전 적용. 운영 deploy 직후 [T-031](./troubleshooting.md#t-031) (path enum case-sensitivity) + [T-032](./troubleshooting.md#t-032) (silent 500 진단 가림막) 함정 발견 → hot-fix release PR #81 로 박음. |
 | **테스트** | 누적 | 120+ pass — Controller 슬라이스 + Service 단위 + JWT 라운드트립 + CORS preflight + Refresh rotation + OAuth2 Stub + WireMock Google tokeninfo + OAuth2 path case 5종 |
@@ -50,8 +51,7 @@
 
 | PR | 상태 | 대기 사유 |
 |---|---|---|
-| **PR 4-final** — AI HTTP 어댑터 (`/chat` 실계약) | 🟢 구현 + 계약 확정 | 코드/테스트 완료(`ai.client.mode=http`). AI 서버 배포됨(HF Space), `/chat` 계약 확정 ([api-contracts.md#ai-추론-서버](./api-contracts.md#ai-추론-서버)). **운영 활성화** = `AI_*` env 주입 + `http` 전환 + FE 통보. 운영 기본값 stub. |
-| **PR 5** — Calendar API (`GET /calendar?year=YYYY&month=MM`) | 🟡 85% | dev 머지 완료. emoji LEFT JOIN + `(user_id, created_at)` 인덱스는 PR 4-final 후 후속 PR |
+| **PR 5** — Calendar API (`GET /calendar?year=YYYY&month=MM`) | 🟡 85% | dev 머지 완료. emoji LEFT JOIN + `(user_id, created_at)` 인덱스는 PR 4-final 후 후속 PR (AI 실연동 완료로 이제 진행 가능) |
 | **PR 8 후반** — 프론트 통합 검증 (Vercel) | 🟡 70% | FE 가 S3 대신 **Vercel** 배포 ✅ + BE CORS origin 추가 ✅ (Mixed Content 해소 + `403 Invalid CORS request` 해소). 회원가입 / 로그인 / 일기 CRUD / 캘린더 + **OAuth2** 전 플로우 통합 검증만 남음. |
 
 ---
@@ -72,10 +72,10 @@ PR 7 (ECS 이전)           ── 먼 미래, HTTPS/도메인 도입 시
 > 각 PR 의 **구현 체크리스트 / 위험 / 운영 머지 전 필수 항목**은 해당 PR 시작 시점에 PR body 에 작성한다.
 > plan.md 는 "무엇 / 왜 / 의존" 까지만.
 
-### PR 4-final — AI 비동기 응답 실어댑터 🤖 ⭐⭐⭐ — **구현 + `/chat` 계약 확정, 운영 활성화 대기**
-**완료**: `AiResponseClient` interface + `StubAiResponseClient`/`HttpAiResponseClient`(`RestClient`) + `ai.client.mode` 토글 + WireMock. AI 서버 배포됨(HF Space) → **`/chat` 실계약 확정**: 요청 `{user_text, recent_emotions:"", diary_date("M월 d일")}` → 응답 `{emotion, aiText, homeComment, diaryDate}`. 폴링 DTO `emoji`→`emotion`+`homeComment` (FE 계약 변경). `invoke` 시그니처 `(postId, content, diaryDate)` 로 단순화 (userId/title 제거). timeout 기본 30s (HF cold start). 실패는 상위 `RestClientException` 으로 catch (T-035).
-**운영 활성화 남은 일**: ① compose.yaml + EC2 `.env` + GitHub Secrets 에 `AI_CLIENT_MODE=http` + `AI_SERVER_URL=https://dlqudwn153-moo-diary-ai-prompt.hf.space` + `AI_TIMEOUT_MS` 주입 (compose 줄은 이 PR 에 추가됨) ② FE 에 응답 필드 `emoji→emotion+homeComment` 통보 ③ 운영 DB 새 컬럼(`emotion`/`home_comment`) `ddl-auto:update` 자동 add 확인.
-**의존**: PR 4-pre ✅. AI 서버 배포 완료 — 잠정 계약 → 확정.
+### PR 4-final — AI 비동기 응답 실어댑터 🤖 ⭐⭐⭐ — ✅ **운영 반영 완료 (release #96)**
+**완료**: `AiResponseClient` interface + `StubAiResponseClient`/`HttpAiResponseClient`(`RestClient`) + `ai.client.mode` 토글 + WireMock. HF Space **`/chat` 실계약**: 요청 `{user_text, recent_emotions:"", diary_date("M월 d일")}` → 응답 `{emotion, aiText, homeComment, diaryDate}`. 폴링 DTO `emoji`→`emotion`+`homeComment`. `invoke(postId, content, diaryDate)` 시그니처. timeout 기본 30s (HF cold start). 실패는 상위 `RestClientException` 으로 catch (T-035).
+**운영 활성화 (완료)**: ① EC2 `.env` 에 `AI_CLIENT_MODE=http` + `AI_SERVER_URL=https://dlqudwn153-moo-diary-ai-prompt.hf.space` + `AI_TIMEOUT_MS=30000` 주입 후 `docker-compose up -d` ✅ ② 운영 DB `ai_response` 에 `emotion`/`home_comment` 컬럼 `ddl-auto:update` 자동 add ✅ ③ Postman 으로 일기→AI 감정/코멘트 폴링 end-to-end 검증 ✅. **남은 일(FE)**: 폴링 응답 필드 `emoji`→`emotion`+`homeComment` 처리.
+**의존**: PR 4-pre ✅. AI 서버 배포 + 계약 확정 + 운영 반영 모두 완료.
 
 ### PR 5 후속 — Calendar emoji JOIN 📅 ⭐⭐
 **Why**: PR 5 가 emoji=null 로 우회됐던 거 채움. `AiResponse` LEFT JOIN 으로 일자별 이모지 매핑.
@@ -152,7 +152,7 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 | OAuth2 토글 패턴 (`oauth2.client.mode=stub\|http`) | provider 추상화의 활성 구현을 부팅 시점에 결정. dev / 로컬 / 단위테스트 = `stub`, 운영 / 시연 = `http`. `@ConditionalOnProperty` + `matchIfMissing=true` 로 default 가 stub — 외부 키 없어도 부팅됨. 같은 패턴은 PR 4-final 의 `ai.client.mode` 로 재사용 예정. |
 | Path enum case-insensitive 정규화 (#80 T-031 fix) | Spring 기본 `String→Enum` 변환은 case-sensitive. `@PathVariable AuthProvider provider` 가 소문자 `google` path 변환 실패 → `MethodArgumentTypeMismatchException` → generic 500. Swagger 의 "대소문자 무관" promise 와 어긋남. **fix**: controller 가 `String` 으로 받아 `.toUpperCase()` 명시 정규화 + 미지원 값은 `InvalidOAuth2ProviderException` (400). 같은 패턴은 다른 enum path 도입 시 재사용. |
 | GlobalExceptionHandler 의 generic `Exception` 에 ERROR 로깅 (#80 T-032 fix) | `@ExceptionHandler` 가 catch 하면 Spring default exception logging 발동 안 함. 무로깅 silent 500 은 운영 진단 0. 응답 body 는 그대로 (사용자 노출 정보 변경 없음), `log.error("...", e)` 로 stdout 만 풍부. 향후 silent 500 후보 발견의 1차 단서. |
-| Squash release 후 dev → main merge 충돌의 표준 해결 (#79, #81) | main 의 release squash commit 이 dev 의 개별 commit 과 같은 줄 건드려 자동 머지 불가. dev 가 strict semantic superset 임을 명시 검증 후 `git merge origin/main -X ours` 로 자동 해결. 이 sweep 후 push 하면 release PR 이 자동 mergeable. **사용자 OK 필수** — auto classifier 가 처음엔 차단했던 패턴. |
+| Squash release 후 dev → main merge 충돌의 표준 해결 (#79, #81, #96) | main 의 release squash commit 이 dev 의 개별 commit 과 같은 줄 건드려 자동 머지 불가. dev 가 strict semantic superset 임을 명시 검증 후 **`git merge origin/main -s ours`**(merge **전략** — 결과 트리를 dev 통째로 채택)로 해결. ⚠️ **`-X ours`(merge 옵션)는 함정** — 충돌 hunk 만 dev 로 풀고 비충돌 hunk 는 양쪽을 병합해서 main 에만 있던(= dev 가 지운) 줄을 부활시킨다 (#96 에서 삭제된 줄이 실제로 부활 → `-s ours` 로 재해결). `git diff --stat origin/dev HEAD` 가 비어야 트리 동일 확인. 이후 push 하면 release PR 자동 mergeable. **사용자 OK 필수** — auto classifier 가 처음엔 차단했던 패턴. [T-037](./troubleshooting.md#t-037). |
 | `GET /post` 정렬/필터 = QueryDSL 동적 쿼리 (레벨 B, 페이징 분리) | 목록 조회에 정렬(기본 postDate desc) + 선택적 from/to/keyword. 조합이 선택적이라 파생 쿼리로는 메서드 폭발 → `BooleanBuilder` 로 null 조건만 skip 하는 단일 메서드 (`PostSearchRepository`, `CalendarRepository` 와 같은 QueryDSL 패턴). 정렬 필드는 화이트리스트 enum (`PostSortField`) — 임의 컬럼 정렬 차단. **페이징(`Page<>`)은 분리** — 응답 모양이 바뀌는 breaking change라 FE 계약 합의가 선행돼야 함. 잘못된 정렬/방향/범위는 `InvalidPostSearchException`(400). |
 | 쿼리 파라미터 타입 변환 실패 글로벌 400 매핑 ([T-034](./troubleshooting.md#t-034)) | `@RequestParam LocalDate` 변환 실패(`?from=abc`)가 핸들러 공백으로 generic 500 → `@ExceptionHandler(MethodArgumentTypeMismatchException)` 로 400. T-031(path enum)이 controller `.toUpperCase()` 국소 우회였을 뿐 핸들러 공백을 안 닫은 게 재노출된 것 — 이번엔 카테고리째 봉합 (path enum / 쿼리 날짜 / `@PathVariable UUID` 전부 커버). |
 | AI 서버 어댑터 = 토글 뒤 실구현 (PR 4-final, OAuth2 패턴 재사용) | `AiResponseClient` 인터페이스 + `StubAiResponseClient`(기본) / `HttpAiResponseClient`(`ai.client.mode=http`). AI 서버가 아직 미배포 + 형태 미확정이라 **우리 측 잠정 계약**으로 먼저 구현하고 토글 뒤에 둠 — 운영은 stub default라 안 깨지고, AI 서버 실체화 시 URL/필드명/인증만 맞추면 됨. 요청 `{userId, postId, title, content}` → 응답 `{message, emoji}`(message→content 매핑). **인증 보류**(헤더 없음). 외부 의존성 분리 = 차단 해소 1번 도구(PR 4-pre / 12-pre 와 동일). |
@@ -164,15 +164,16 @@ API 명세 + 호출 패턴 + 변경 정책 → **[`api-contracts.md`](./api-cont
 
 | 일자 | 변경 |
 |---|---|
+| 2026-06-15 | **AI `/chat` 실연동 운영 반영 (release #96)** — PR #95(`/chat` 계약 확정)를 dev→main release(#96)로 운영 반영. EC2 `.env` 에 `AI_CLIENT_MODE=http` + `AI_SERVER_URL=https://dlqudwn153-moo-diary-ai-prompt.hf.space` + `AI_TIMEOUT_MS=30000` 주입 후 `docker-compose up -d`. 운영에서 일기 작성→`POST /chat`→`emotion`/`aiText`/`homeComment` 저장→폴링 수신 **end-to-end 검증(Postman)**. `ddl-auto:update` 가 `ai_response` 에 `emotion`/`home_comment` 컬럼 자동 add. dev→main 충돌은 **`-s ours`(전략)** 로 해결 — `-X ours`(옵션) 함정 회피([T-037](./troubleshooting.md#t-037)). **FE 남은 일**: 폴링 응답 필드 `emoji`→`emotion`+`homeComment` 처리. |
 | 2026-06-12 | **AI 서버 실연동 — `/chat` 계약 맞춤 (PR 4-final 완성)** — AI 배포됨(Hugging Face Space). 어댑터를 실계약으로 재작성: 요청 `{user_text, recent_emotions:"", diary_date}` → 응답 `{emotion, aiText, homeComment, diaryDate}`. `AiResponse` 엔티티 `emoji`→`emotion`+`homeComment` 컬럼 교체, 폴링 DTO/서비스/테스트 전부 갱신. `invoke(postId, content, diaryDate)` 시그니처 단순화. `diary_date` 는 `"M월 d일"` 포맷, `recent_emotions` 빈 문자열 고정(AI 담당자 합의). timeout 기본 10s→30s. compose.yaml 에 `AI_*` env 3개 추가. **운영 머지 전 필수**: ① EC2 `.env` + GitHub Secrets 에 `AI_CLIENT_MODE=http`/`AI_SERVER_URL`/`AI_TIMEOUT_MS` ② **FE 에 응답 필드 `emoji`→`emotion`+`homeComment` 통보**. |
 | 2026-06-11 | **FE Vercel 배포 → CORS Vercel origin 추가 (운영 설정, 코드/PR 변경 없음)** — FE 가 S3 대신 **Vercel**(`https://moo-diary-ten.vercel.app`)에 배포. Mixed Content 해소 후 `/api/auth/login` 이 서버에 도달하지만 `403 Invalid CORS request` (허용 origin 미등록). EC2 `.env` 의 `APP_CORS_ALLOWED_ORIGINS` 에 Vercel origin 추가 + `sudo docker-compose up -d` 재생성으로 해소. allowlist 는 `CorsConfig` (`src/main/java/hoseo/moodiary/config/CorsConfig.java`) 가 env 외부화 → **코드/PR 변경 없음**, CD 가 `.env` 를 안 덮어써서 영속. 함정 2건: ① `.env` 에 키가 원래 없어 compose `:-` default(localhost)로 조용히 동작 → 운영 origin 전부 차단, ② 쉘 프롬프트에 `KEY=val` 입력은 파일 수정이 아니라 세션 변수라 무효 (`echo '...' >> .env` 로 써넣어야 함). |
 | 2026-06-09 | **fix: 긴 일기 본문 저장 시 500 (FE 버그 제보)** — `Post.content` 가 length 미지정이라 JPA 기본 `VARCHAR(255)` 매핑 → 256자+ (특히 여러 줄) 본문이 `Data too long` → generic 500. **줄바꿈 무관, 길이가 원인**. 컬럼 `columnDefinition="TEXT"` + DTO `@Size`(title 255 / content 10000)로 binding 단계 400. 회귀 테스트 `PostContentLengthTest`(@DataJpaTest) + 컨트롤러 400 테스트. [T-036](./troubleshooting.md#t-036). **운영 머지 전 필수**: `ALTER TABLE post MODIFY COLUMN post_content TEXT;` (`ddl-auto:update` 가 기존 컬럼 타입 변경 안 함). |
 | 2026-06-09 | **AI 서버 HTTP 어댑터 구현 (PR 4-final)** — `AiResponseClient` 인터페이스화 + `StubAiResponseClient`(기본)/`HttpAiResponseClient` + `ai.client.mode` 토글(OAuth2 패턴). 요청에 `userId` 추가 (`{userId,postId,title,content}` → `{message,emoji}`). `application.yaml` 에 `ai.*` 블록(client.mode/server.url/timeout-ms). WireMock 테스트 7케이스. 실패 catch 는 상위 `RestClientException` 으로 ([T-035](./troubleshooting.md#t-035)). **AI 서버 미배포 → 운영 기본값 stub 유지, 인증 보류, 계약 잠정.** 스키마 변경 없음. |
 | 2026-06-09 | **`GET /post` 정렬/필터 추가 (레벨 B)** — 정렬(기본 `postDate,desc`) + 선택적 `from`/`to`(postDate 범위) + `keyword`(제목/내용 부분일치). QueryDSL `PostSearchRepository` 신설 (`BooleanBuilder` 동적 조건), 정렬 화이트리스트 `PostSortField` enum, `InvalidPostSearchException`(400). 부수: `MethodArgumentTypeMismatchException` 글로벌 400 핸들러 ([T-034](./troubleshooting.md#t-034)) — 잘못된 날짜 형식 500 함정 봉합. dead code `findAllByUser_Id` 제거. **페이징은 분리** (TODO, `Page<>` breaking change). **인덱스 권장**: `post(user_id, post_date)` — `ddl-auto` 가 인덱스 미보장이라 운영 트래픽 증가 시 수동 DDL (PR body 명시). |
 | 2026-05-29 | **Post 에 `postDate` (LocalDate) 추가** — 사용자가 "지나간 날짜에 대한 일기" 작성 시 명시. 누락 시 서버가 `LocalDate.now()` 로 폴백 (기본 = "오늘 일기"). `createdAt` (자동) 과 별개. Request/Response DTO 모두 yyyy-MM-dd 포맷. update 시 변경 가능. `api-contracts.md` 의 Post 엔드포인트 4개 + 의사결정 로그 갱신. **운영 머지 전 RDS ALTER 필수** (`ddl-auto: update` 가 NOT NULL 추가 못 함 — T-019 교훈 5번). |
-| 2026-05-29 | **release PR #81 — T-031/T-032 hot-fix 운영 반영** — release PR #79 의 deploy 직후 발견된 함정 2건 (path enum case-sensitivity / silent 500 진단 가림막) 의 fix #80 을 main 으로. dev → main merge 충돌은 `-X ours` 패턴으로 자동 해결 (의사결정 로그 참조). 운영 검증: `/auth/oauth2/google` (소문자) → 401 정상 / `/auth/oauth2/twitter` → 400 정상. |
+| 2026-05-29 | **release PR #81 — T-031/T-032 hot-fix 운영 반영** — release PR #79 의 deploy 직후 발견된 함정 2건 (path enum case-sensitivity / silent 500 진단 가림막) 의 fix #80 을 main 으로. dev → main merge 충돌은 `-X ours` 로 해결 (⚠️ 정정: 올바른 방법은 `-s ours` 전략 — [T-037](./troubleshooting.md#t-037)). 운영 검증: `/auth/oauth2/google` (소문자) → 401 정상 / `/auth/oauth2/twitter` → 400 정상. |
 | 2026-05-29 | **fix PR #80 — OAuth2 path case-insensitive + GlobalExceptionHandler 진단 로깅** — release #79 직후 발견한 두 함정 같이. controller 가 `String` 으로 받아 `.toUpperCase()` 정규화 + 신규 `InvalidOAuth2ProviderException` (400). `@Slf4j` + `log.error` 추가. 테스트 5 케이스 추가 (소/대/혼합 case + 미지원 + LOCAL service-level reject). troubleshooting [T-031](./troubleshooting.md#t-031) / [T-032](./troubleshooting.md#t-032). |
-| 2026-05-29 | **release PR #79 — PR 9 MkDocs + PR 12 Google OAuth2 풀체인 + PKM 첫 사이클 (#67~#78) 운영 반영** — dev → main merge 가 main 의 release squash commit 들과 충돌 → `-X ours` 패턴으로 dev (semantic superset) 우선 자동 해결 후 push. 운영 머지 전 체크리스트 4건 모두 ✅ (compose env passthrough / GitHub Secrets / EC2 .env / RDS ALTER 4건). CD 성공 후 운영 검증에서 [T-031](./troubleshooting.md#t-031) 발견 → 즉시 hot-fix #80 + release #81 사이클로 fix. |
+| 2026-05-29 | **release PR #79 — PR 9 MkDocs + PR 12 Google OAuth2 풀체인 + PKM 첫 사이클 (#67~#78) 운영 반영** — dev → main merge 가 main 의 release squash commit 들과 충돌 → `-X ours` 로 dev (semantic superset) 우선 해결 (⚠️ 정정: 올바른 방법은 `-s ours` 전략 — T-037) 후 push. 운영 머지 전 체크리스트 4건 모두 ✅ (compose env passthrough / GitHub Secrets / EC2 .env / RDS ALTER 4건). CD 성공 후 운영 검증에서 [T-031](./troubleshooting.md#t-031) 발견 → 즉시 hot-fix #80 + release #81 사이클로 fix. |
 | 2026-05-28 | **PR 12-final — Google OAuth2 실어댑터 + Kakao 제외 (#77)** — `HttpGoogleOAuth2Provider` (`RestClient` + tokeninfo + aud / email_verified 검증) + WireMock 단위 테스트 8개 + `oauth2.client.mode` 토글 (`@ConditionalOnProperty` matchIfMissing=stub). `AuthProvider` enum 에서 KAKAO 제거. application.yaml 에 `${GOOGLE_OAUTH_CLIENT_ID:dummy}` + `${GOOGLE_TOKENINFO_URL:...}` + `${OAUTH2_CLIENT_MODE:stub}` placeholder 추가. learning-notes 13 추가 (OAuth2 Token-Exchange + audience + email_verified). |
 | 2026-05-28 | **PR 12-compose (#78)** — `compose.yaml` 에 OAuth2 env 2개 (`OAUTH2_CLIENT_MODE` + `GOOGLE_OAUTH_CLIENT_ID`) 컨테이너 주입 + `.env.example` 보충. PR 12-final 의 운영 머지 전 사전 작업. |
 | 2026-05-28 | **PR 12-pre 머지 (#76)** — OAuth2 Stub 흐름 + User 엔티티 provider/providerId 추가. 외부 Console 셋업 / HTTP 의존 없이 BE 만으로 OAuth2 흐름 정착. PR 4-pre 와 같은 외부 의존성 차단 해소 패턴. |
