@@ -9,7 +9,7 @@
 > - 단순 오타 / 개인 IDE 문제는 skip.
 > - 항목 schema: **증상 / 원인 / 해결 / 시점 / 교훈**.
 >
-> 마지막 갱신: 2026-06-09 (T-035 추가 — AI 서버 HTTP 어댑터의 RestClient read 타임아웃이 본문 추출 도중 터지면 `ResourceAccessException` 이 아닌 상위 `RestClientException` 으로 와서 타임아웃 catch 가 누락되던 함정. 상위 타입으로 넓게 catch. T-034 는 같은 날 쿼리 파라미터 타입 변환 500 함정.)
+> 마지막 갱신: 2026-06-15 (T-037 추가 — squash 기반 dev→main release 충돌은 `-s ours`(전략)로 풀어야 하고 `-X ours`(옵션)는 비충돌 hunk 에서 dev 가 지운 옛 코드를 부활시키는 함정. release #96 에서 실제로 삭제 줄 부활 → `-s ours` 재해결. plan.md 의사결정 로그의 옛 `-X ours` 기록도 정정.)
 
 ---
 
@@ -70,6 +70,8 @@ CORS 운영 검증 (PR #38) 직후 컨테이너 restart loop → 표면은 "CORS
 - [T-034](#t-034) **쿼리 파라미터 타입 변환 실패 → 500 (T-031 의 근본 메커니즘을 글로벌하게 봉합)** — `GET /post?from=abc` 처럼 `@RequestParam LocalDate` 로 못 바꾸는 값은 binding 단계에서 `MethodArgumentTypeMismatchException` 을 던지는데, 전용 핸들러가 없어 generic 500 으로 떨어진다. T-031 은 같은 예외를 path enum (`/auth/oauth2/google`) 케이스에서 controller 의 `.toUpperCase()` 로만 국소 처리했을 뿐, 핸들러 공백 자체는 안 닫았다. `GET /post` 에 날짜 쿼리 파라미터가 생기며 같은 함정이 재노출 → `@ExceptionHandler(MethodArgumentTypeMismatchException.class)` 로 400 매핑해 **카테고리 전체(쿼리/path 의 모든 타입 변환 실패)를 한 번에 봉합**.
 - [T-035](#t-035) **RestClient read 타임아웃이 `ResourceAccessException` 아닌 `RestClientException`(body 추출 단계)으로 올라옴 → 타임아웃 catch 누락** — `HttpAiResponseClient` 타임아웃 테스트가 `catch (ResourceAccessException)` 을 통과해버리고 `RestClientException: Error while extracting response ... [application/octet-stream]` 로 떨어졌다. read 타임아웃이 **응답 본문 읽기 도중** 터지면 connect 단계의 `ResourceAccessException` 이 아니라 추출 단계의 `RestClientException` 으로 surface 한다. 해결: 상위 타입 `RestClientException` 으로 넓게 catch (`ResourceAccessException` 도 하위라 함께 잡힘). `onStatus` 의 도메인 예외(`AiInferenceException`)는 `RestClientException` 이 아니라 안 잡히고 정상 전파.
 - [T-036](#t-036) **`@Column` length 미지정 String → JPA 기본 `VARCHAR(255)` → 256자+ 본문 저장 시 `Data too long` 으로 500 (FE: "여러 줄 일기 저장 실패")** — `Post.content` 가 `@Column(name="post_content")` 만 달려 길이 미지정 → 기본 `VARCHAR(255)`. 256자 넘는 (특히 여러 줄) 일기가 `DataIntegrityViolationException`(H2: `Value too long for column`)로 터지고 미핸들 → generic 500 `{"message":"서버 오류가 발생했습니다."}`. **줄바꿈이 아니라 길이가 원인** — 짧은 글이 201 로 통과한 것과 일관. 해결: 컬럼 `columnDefinition="TEXT"` + DTO `@Size(max=...)` 로 binding 단계 400. **운영 주의**: `ddl-auto:update` 는 기존 컬럼 타입/길이를 ALTER 안 함 → 수동 `ALTER TABLE post MODIFY COLUMN post_content TEXT;` 필요.
+
+- [T-037](#t-037) **Squash 기반 dev→main release 충돌은 `-s ours`(전략)로 — `-X ours`(옵션)는 비충돌 hunk 에서 옛 코드 부활 함정** — `-X ours`(merge 옵션)는 충돌 hunk 만 dev 우선이고 비충돌 hunk 는 양쪽 병합이라 main 에만 있던(dev 가 지운) 줄이 부활. `-s ours`(merge 전략)는 트리를 dev 통째로 채택해 안전. dev 가 main 의 semantic superset 일 때만, `git diff --stat origin/dev HEAD` 로 트리 동일 확인.
 
 ### AWS / 운영 인프라
 - [T-006](#t-006) EC2 stop/start 시 퍼블릭 IP가 매번 바뀜 → GitHub Secret 갱신 지옥
@@ -509,6 +511,17 @@ CORS 운영 검증 (PR #38) 직후 컨테이너 restart loop → 표면은 "CORS
 | **해결** | <br>① CLI 테스트는 ASCII로 (`title=hello`)<br>② Postman/Swagger UI/InsomniaREST 같은 GUI 도구 사용 (UTF-8 보장)<br>③ 그래도 git-bash로 보내야 한다면 `--data-binary @file.json` + UTF-8 인코딩된 파일 |
 | **시점** | 이번 세션 — Post 생성 검증 시 |
 | **교훈** | CLI 테스트는 디버깅용 sanity check일 뿐, 실 클라이언트는 FE/Postman/Swagger. CLI에서 한글이 안 나간다고 서버 코드를 고치지 말 것 |
+
+<a id="t-037"></a>
+### T-037 · Squash 기반 dev→main release 충돌은 `-s ours`(전략), `-X ours`(옵션) 아님
+
+| | |
+|---|---|
+| **증상** | release(dev→main) PR 이 CONFLICTING. `git merge origin/main` 시 여러 파일 충돌. `-X ours` 로 풀어 push 했더니 dev 에서 이미 삭제한 코드 줄(예: `UUID userId = post.getUser().getId();`)이 되살아남. |
+| **원인** | main 은 직전 release 를 **squash 단일 commit** 으로 갖고 dev 는 같은 내용을 개별 commit 으로 가져 git 이 divergent 로 본다. `-X ours` 는 merge **옵션** — 충돌 hunk 만 ours(dev) 우선으로 풀고 **비충돌 hunk 는 양쪽을 병합**한다. 그래서 main 에만 있던(= dev 가 의도적으로 지운) 줄이 비충돌로 분류돼 부활. |
+| **해결** | `git merge origin/main -s ours` (merge **전략** — 결과 트리를 ours=dev 통째로 채택, main 의 어떤 줄도 끌어오지 않음). 단 **dev 가 main 의 strict semantic superset** 일 때만 안전 — `git diff --stat origin/dev HEAD` 가 비어야(트리 동일) 확인. merge commit 의 부모가 dev+main 둘 다인지 확인 후 push → release PR 자동 mergeable. |
+| **시점** | release #96 (AI `/chat` 운영 반영). `-X ours` 로 삭제 줄 부활 발견 → `git reset --hard origin/dev` 후 `-s ours` 로 재해결. plan.md 의사결정 로그의 #79/#81 기록도 `-X ours` 로 잘못 적혀 있던 것을 함께 정정. |
+| **교훈** | `-X ours`(옵션) ≠ `-s ours`(전략). "트리를 통째로 dev 로" 가 목적이면 **전략**(`-s`)을 써야 한다. `-X ours` 는 "충돌난 곳만 ours" 라 비충돌 영역에서 조용히 상대 코드를 섞는다 — diff 로 트리 동일성을 검증하지 않으면 못 잡는다. |
 
 ---
 

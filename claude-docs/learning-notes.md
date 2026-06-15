@@ -29,6 +29,12 @@
 15. [Mixed Content — HTTPS 페이지의 HTTP API 호출은 브라우저가 *요청 전에* 차단 (Vercel rewrites 가 빠른 해결책)](#15-mixed-content--https-페이지의-http-api-호출은-브라우저가-요청-전에-차단-vercel-rewrites-가-빠른-해결책)
 16. [JPA `String` 컬럼의 기본 `VARCHAR(255)` 함정 + `ddl-auto:update` 는 기존 컬럼을 안 넓힌다](#16-jpa-string-컬럼의-기본-varchar255-함정--ddl-autoupdate-는-기존-컬럼을-안-넓힌다)
 17. [403 "Invalid CORS request" 의 정체 — 서버가 던지는 CORS 거부 + origin 정확 문자열 매칭 + env 외부화 함정](#17-403-invalid-cors-request-의-정체--서버가-던지는-cors-거부--origin-정확-문자열-매칭--env-외부화-함정)
+18. [데이터 기밀성 = 암호화 계층 선택 — 전송 TLS / 저장 TDE / 앱 ALE, 그리고 ALE 만 검색 UX 와 트레이드오프](#18-데이터-기밀성--암호화-계층-선택--전송-tls--저장-tde--앱-ale-그리고-ale-만-검색-ux-와-트레이드오프)
+19. [JPA 더티 체킹 — `save()` 를 안 부르는데 UPDATE 가 나가는 이유 (영속성 컨텍스트)](#19-jpa-더티-체킹--save-를-안-부르는데-update-가-나가는-이유-영속성-컨텍스트)
+20. [N+1 문제와 `FetchType.LAZY` — 그리고 FK 만 읽어 소유권 검사를 공짜로 만드는 트릭](#20-n1-문제와-fetchtypelazy--그리고-fk-만-읽어-소유권-검사를-공짜로-만드는-트릭)
+21. [조회 성능 — 복합 인덱스 컬럼 순서 + 안정 정렬(tiebreaker)](#21-조회-성능--복합-인덱스-컬럼-순서--안정-정렬tiebreaker)
+22. [UUID PK vs Auto-increment — ID 추측 방지의 대가는 인덱스 단편화](#22-uuid-pk-vs-auto-increment--id-추측-방지의-대가는-인덱스-단편화)
+23. [JPA 연관관계 매핑 — 1:1 단방향 + `@Enumerated(STRING)` 의 함정](#23-jpa-연관관계-매핑--11-단방향--enumeratedstring-의-함정)
 
 ---
 
@@ -1682,6 +1688,280 @@ curl -i -X OPTIONS http://localhost:8080/api/auth/login \
 
 ---
 
+## 18. 데이터 기밀성 = 암호화 계층 선택 — 전송 TLS / 저장 TDE / 앱 ALE, 그리고 ALE 만 검색 UX 와 트레이드오프
+
+### 한 줄 요약
+> "암호화를 했나/안 했나" 는 잘못된 질문. 암호화는 **데이터가 거치는 구간마다 다른 계층**으로 적용되고, 각 계층이 막는 위협이 다르다. 핵심 통찰: **전송 TLS·저장 TDE 는 검색 UX 를 안 해쳐서 거의 항상 켜고, 앱 레벨 ALE 만 검색·정렬과 충돌**하므로 "정말 그 위협이 있는가" 를 따져 선택적으로 쓴다.
+
+### 세 계층 — 데이터의 일생으로 보기
+
+```
+사용자가 일기 작성
+   │
+   │  ① 전송 중(in transit)   ← TLS 가 보호 (도청·중간자)
+   ▼
+백엔드 서버 (메모리에선 평문 처리)
+   │
+   │  ② 저장하는 순간(at rest) ← TDE 가 보호 (디스크·백업·스냅샷 도난)
+   ▼                          ← (ALE 를 쓰면 여기서 앱이 직접 암호화 → 검색이 깨짐)
+DB 디스크에 저장
+```
+
+| | **TLS** (Transport Layer Security) | **TDE** (Transparent Data Encryption) | **ALE** (Application-Level Encryption) |
+|---|---|---|---|
+| 지키는 구간 | 이동 중 (in transit) | 저장 중 (at rest) | 저장 중 (at rest) |
+| 암호화 주체 | 인프라 (ALB·CloudFront·nginx) | DB/스토리지 자동 (RDS 체크박스) | **우리 앱 코드** |
+| 막는 위협 | 네트워크 도청·패킷 가로채기 | 디스크·스냅샷·백업 파일 도난 | DB 자체 유출 (DBA·SQL injection 이 봐도 암호문) |
+| 검색·정렬·인덱스 | 영향 없음 | 영향 없음 (DB 가 메모리에선 평문) | ❌ **깨짐** |
+| `https` 의 `s` | 이게 TLS (구 SSL) | — | — |
+
+### 왜 ALE 만 검색 UX 를 죽이나
+DB 에 `"x8Kf9a2..."` 암호문이 들어가면 DB 입장에선 의미 없는 글자다. `LIKE '%우울%'` 같은 부분일치, `ORDER BY`, 인덱스가 전부 무력화 → **전체 row 를 꺼내 하나씩 복호화 후 메모리에서 필터하는 풀스캔** → 데이터가 늘수록 성능이 선형으로 악화되고 검색 기능 자체가 사라진다. 우회 기법(blind index, deterministic 암호화)도 부분일치 불가·빈도 분석 취약 등 또 다른 비용을 만든다.
+
+### Moodiary 의 판단 (교수 "일기 암호화하라" Q 대비)
+일기 서비스의 핵심 UX 가 **키워드 검색·날짜 정렬**(우리 `PostSearchRepository` 가 정확히 이걸 한다)이라, ALE 를 쓰면 그 기능이 깨진다. 교수가 걱정한 "일기 외부 노출" 은 검색 UX 를 해치지 않는 **TLS(전송) + TDE(저장)** 계층으로 충분히 막을 수 있다 → **검색을 죽이는 ALE 대신 UX 중립적인 TLS·TDE 로 같은 기밀성 목표를 달성**하는 것이 합리적. 단, 현재 배포 상태에선 이 두 계층도 아직 미적용 — 브라우저↔백엔드가 평문 HTTP([15번 Mixed Content](#15-mixed-content--https-페이지의-http-api-호출은-브라우저가-요청-전에-차단-vercel-rewrites-가-빠른-해결책) 참조)라 **인프라 고도화 시 HTTPS 종단 + RDS 암호화로 채우는 게 다음 단계**다.
+
+### 인증과 암호화는 다른 축
+- **인증/인가**(JWT·소유권 검사) = "앱을 **경유**한" 접근을 막는다 (남의 일기 조회 차단).
+- **암호화**(TLS·TDE·ALE) = "앱을 **우회**한" 데이터 접근을 막는다 (네트워크 도청·디스크 도난).
+- 그래서 "인증 했으니 암호화 불필요" 는 틀린 말 — 막는 위협이 겹치지 않는다. 다만 위협 모델에 그 우회 경로가 현실적인지를 보고 비용 대비 효과로 계층을 고르는 것.
+
+### 발표 / Q&A 한 줄
+> "암호화는 단일 선택이 아니라 전송(TLS)·저장(TDE)·앱(ALE) 계층 선택입니다. 일기는 검색·정렬이 핵심 UX라 인덱스를 깨는 ALE는 비용이 크고, 같은 기밀성을 검색을 안 해치는 TLS·TDE로 달성하는 게 맞다고 보고 ALE를 의도적으로 배제했습니다."
+
+### 코드 위치
+- `src/main/java/hoseo/moodiary/repository/PostSearchRepository.java` — ALE 를 쓰면 깨졌을 `containsIgnoreCase`(키워드)·`orderBy`(정렬)
+- `claude-docs/security.md` — 보안 정책·약점 정리 (HTTPS 미적용 트레이드오프)
+
+### 관련 노트
+- [15번. Mixed Content](#15-mixed-content--https-페이지의-http-api-호출은-브라우저가-요청-전에-차단-vercel-rewrites-가-빠른-해결책) — "브라우저↔백엔드 구간 TLS" 가 현재 왜 비어 있는지(HTTP)와 직결.
+- [2번. SHA-256 해시](#2-sha-256-해시--db-에-hash-만-저장하는-이유) / [3번. BCrypt vs SHA-256](#3-bcrypt-vs-sha-256--같은-해시인데-왜-다른-알고리즘) — "해시(복원 불가)" 와 "암호화(복호화 가능)" 는 다른 도구. 비밀번호는 해시, 일기 본문 기밀성은 암호화 계층 문제.
+
+---
+
+## 19. JPA 더티 체킹 — `save()` 를 안 부르는데 UPDATE 가 나가는 이유 (영속성 컨텍스트)
+
+### 한 줄 요약
+> `@Transactional` 안에서 조회한 엔티티의 필드를 바꾸면, `repository.save()` 를 부르지 않아도 **트랜잭션 커밋 시점에 Hibernate 가 자동으로 UPDATE** 를 날린다. 비결은 영속성 컨텍스트가 조회 시점의 "스냅샷" 을 들고 있다가 커밋 직전에 현재 값과 비교(dirty checking)하기 때문.
+
+### 우리 코드에서 — UPDATE SQL 이 어디에도 없다
+`Post.update(...)` 도 `AiResponse.markDone(...)` 도 그냥 필드 대입만 한다:
+
+```java
+// PostService (개념)
+@Transactional
+public void update(UUID postId, UUID userId, PostRequestDto dto) {
+    Post post = postRepository.findById(postId)...;   // 영속 상태로 조회
+    post.update(dto.title(), dto.content(), dto.postDate());  // 필드만 바꿈 — save() 없음
+}   // ← 메서드 끝 = 트랜잭션 커밋 = 이 순간 Hibernate 가 변경 감지 → UPDATE 발사
+```
+
+### 작동 원리 — 영속성 컨텍스트의 스냅샷
+
+```
+1. findById → DB row 를 읽어 엔티티 생성
+   이때 영속성 컨텍스트가 "스냅샷"(읽은 직후의 값) 을 따로 복사해 둠
+2. post.update(...) 로 title/content 변경 → 엔티티(원본)만 바뀜, 스냅샷은 그대로
+3. 트랜잭션 커밋 → flush 발생
+   Hibernate 가 [현재 엔티티] vs [스냅샷] 을 필드별로 비교
+   → 바뀐 컬럼만 골라 UPDATE post SET title=?, content=? WHERE post_id=?
+```
+
+→ 핵심 개념 3개: **영속성 컨텍스트(Persistence Context)**, **1차 캐시**, **flush(변경을 SQL 로 내보내는 시점)**.
+
+### 왜 우리는 setter 를 막고 명시 메서드만 두나 (CLAUDE.md 규칙의 진짜 이유)
+엔티티에 `@NoArgsConstructor(access = PROTECTED)` + setter 금지 + `update()` / `markDone()` 같은 명시 메서드만 두는 이유가 바로 더티 체킹이다:
+- setter 를 열어두면 어디서든 필드를 바꿀 수 있고, 그게 우연히 트랜잭션 안이면 **의도치 않은 UPDATE** 가 조용히 나간다.
+- 변경 경로를 `update()` / `markDone()` / `markFailed()` 로 **좁히면**, "이 엔티티가 바뀌는 곳" 이 코드에서 명확해지고 도메인 규칙(상태 전이)을 강제할 수 있다.
+
+### 함정 — detached 엔티티엔 안 먹힌다
+더티 체킹은 **영속 상태(persistent)** 엔티티에만 동작한다. 트랜잭션 밖에서 조회했거나(`@Transactional` 없음), 영속성 컨텍스트가 닫힌 뒤(준영속/detached)의 엔티티는 필드를 바꿔도 UPDATE 가 안 나간다 → 이때는 명시적으로 `save()` 가 필요. "save() 안 했는데 왜 저장이 안 되지?" 의 단골 원인.
+
+### 발표 / Q&A 한 줄
+> "JPA 는 `@Transactional` 안에서 조회한 엔티티의 변경을 커밋 시점에 자동 감지해서 UPDATE 합니다(더티 체킹). 그래서 저희는 setter 를 막고 `Post.update()` 같은 명시 메서드로만 상태를 바꿔서, 변경 경로를 좁히고 의도치 않은 UPDATE 를 막습니다."
+
+### 코드 위치
+- `src/main/java/hoseo/moodiary/entitiy/Post.java` — `update()` (66번 줄), `@NoArgsConstructor(PROTECTED)`
+- `src/main/java/hoseo/moodiary/entitiy/AiResponse.java` — `markDone()` / `markFailed()` 상태 전이 메서드
+
+### 관련 노트
+- [10번. Spring 비동기](#10-spring-비동기-enableasync--async--동기-블로킹-회피--db-상태머신--race-방지) — `@Async` 스레드가 `markDone()` 으로 PENDING→DONE 시키는 것도 더티 체킹으로 UPDATE 된다. 단 별도 트랜잭션 경계라 commit-후-trigger race 주의.
+
+---
+
+## 20. N+1 문제와 `FetchType.LAZY` — 그리고 FK 만 읽어 소유권 검사를 공짜로 만드는 트릭
+
+### 한 줄 요약
+> 연관 엔티티를 `EAGER` 로 두거나 목록을 돈 뒤 각 연관을 건드리면, 목록 쿼리 1번 + 각 행마다 연관 쿼리 N번 = **N+1 쿼리** 가 터진다. `LAZY` 로 미루면 안 건드린 연관은 쿼리가 안 나가고, 특히 **연관 엔티티의 ID(=FK) 만 읽을 땐 추가 쿼리조차 없다**(프록시가 FK 를 이미 들고 있음).
+
+### N+1 이 터지는 모습
+
+```
+일기 목록 100개 조회: SELECT * FROM post WHERE user_id = ?   (1번)
+for (Post p : posts) p.getUser().getNickname();  // 각 Post 마다
+  → SELECT * FROM user WHERE user_id = ?          (100번)
+= 총 101번 쿼리. 목록이 커질수록 폭발.
+```
+
+### 우리 코드 — `LAZY` 와 "FK 만 읽기" 트릭
+`Post.java`:
+
+```java
+@ManyToOne(fetch = FetchType.LAZY, optional = false)   // 즉시 User 조회 안 함
+@JoinColumn(name = "user_id", nullable = false)
+private User user;
+
+public boolean isOwnedBy(UUID userId) {
+    return this.user != null && this.user.getId().equals(userId);  // ★ ID 만 접근
+}
+```
+
+`LAZY` 면 `post.getUser()` 는 진짜 User 가 아니라 **프록시(가짜 객체)** 를 돌려준다. 그런데 `post.getUser().getId()` 처럼 **PK(=FK 컬럼 user_id) 만** 읽으면, 그 값은 이미 `post` 행의 FK 컬럼에 있으니 **프록시가 추가 SELECT 없이 바로 답한다**. 닉네임·이메일 같은 다른 필드를 건드려야 비로소 User 조회 쿼리가 나간다.
+
+→ 그래서 **소유권 검사(`isOwnedBy`)가 추가 쿼리 0번** 으로 동작한다. Post.java 51~53번 주석이 정확히 이 얘기.
+
+### N+1 진짜로 풀어야 할 때의 해법
+연관 엔티티의 다른 필드까지 목록에서 써야 하면 `LAZY` 만으론 N+1 이 재발 → 그땐:
+
+| 기법 | 설명 |
+|---|---|
+| **fetch join** | `select p from Post p join fetch p.user` — 한 방에 JOIN 으로 가져옴 |
+| `@EntityGraph` | 메서드에 어노테이션으로 fetch 그래프 지정 (JPQL 없이) |
+| `@BatchSize` / `default_batch_fetch_size` | N번을 `IN (?,?,...)` 한 번으로 묶어 1+1 로 축소 |
+
+### `LAZY` vs `EAGER` 기본값 함정
+- `@ManyToOne` / `@OneToOne` 의 JPA 기본값은 **EAGER** → 무심코 두면 항상 연관을 즉시 조회 → N+1 의 온상. 그래서 우리는 둘 다 **명시적으로 LAZY** (Post.user, AiResponse.post).
+- `@OneToMany` / `@ManyToMany` 기본값은 LAZY.
+
+### 발표 / Q&A 한 줄
+> "연관관계를 EAGER 로 두면 목록 조회에서 N+1 쿼리가 터져서 전부 LAZY 로 명시했습니다. 게다가 소유권 검사는 연관 User 의 ID(=FK) 만 읽기 때문에 LAZY 프록시가 추가 쿼리 없이 답해서, 인가 체크가 쿼리 비용 0으로 동작합니다."
+
+### 코드 위치
+- `src/main/java/hoseo/moodiary/entitiy/Post.java` — `@ManyToOne(LAZY)` + `isOwnedBy()` (51~75번)
+- `src/main/java/hoseo/moodiary/entitiy/AiResponse.java` — `@OneToOne(LAZY)` post
+
+### 관련 노트
+- [21번. 조회 성능](#21-조회-성능--복합-인덱스-컬럼-순서--안정-정렬tiebreaker) — N+1 을 줄여도 인덱스가 없으면 각 쿼리가 풀스캔. "쿼리 수" 와 "쿼리당 비용" 은 다른 축.
+
+---
+
+## 21. 조회 성능 — 복합 인덱스 컬럼 순서 + 안정 정렬(tiebreaker)
+
+### 한 줄 요약
+> 우리 목록·캘린더 쿼리는 항상 `WHERE user_id = ? ORDER BY post_date(or created_at)` 꼴. 이걸 **한 인덱스로** 처리하려면 `(user_id, post_date)` 처럼 **등호 필터 컬럼을 앞, 범위/정렬 컬럼을 뒤** 로 두는 복합 인덱스가 필요하다. 그리고 정렬 키가 중복될 때 순서가 흔들리지 않도록 **유니크한 보조 키(tiebreaker)** 를 마지막에 붙인다.
+
+### 복합 인덱스 컬럼 순서가 왜 중요한가
+`PostSearchRepository` 주석의 권장: `post(user_id, post_date)`. B-Tree 인덱스는 **왼쪽 컬럼부터 정렬**되어 있다(leftmost prefix rule):
+- `user_id` 로 등호 매칭 → 그 사용자 구간으로 점프
+- 그 구간 안에서 `post_date` 가 이미 정렬돼 있음 → **정렬(ORDER BY)도 인덱스로 공짜**, 범위(from~to)도 구간 스캔
+
+순서를 `(post_date, user_id)` 로 뒤집으면 → `user_id` 등호 필터에 인덱스를 제대로 못 타고, 정렬도 따로 해야 함. **"등호 먼저, 범위/정렬 나중"** 이 복합 인덱스 설계의 핵심 규칙.
+
+> `ddl-auto: update` 는 인덱스 생성을 보장하지 않으므로([8번](#8-ddl-auto-update-의-한계--운영-머지-후-unique-인덱스-사후-검증이-필요한-이유)), 운영 트래픽이 늘면 이 복합 인덱스는 **수동 DDL** 로 박아야 한다. `EXPLAIN SELECT ...` 로 인덱스를 실제로 타는지 확인.
+
+### 안정 정렬 — 왜 `id` 를 정렬 끝에 끼워넣나
+`PostSearchRepository.orderSpecifiers()` 는 1차 키(`postDate`) 뒤에 `createdAt desc → id asc` 를 보조 키로 붙인다:
+
+```java
+orders.add(ascending ? primaryPath.asc() : primaryPath.desc());  // 1차: postDate
+if (sortField != CREATED_AT) orders.add(post.createdAt.desc());   // 보조1
+orders.add(post.id.asc());                                        // 보조2 (유니크 — 최종 tiebreaker)
+```
+
+**문제**: 같은 `postDate` 가 여러 건이면 DB 는 그들 사이 순서를 보장하지 않는다 → 새로고침마다 순서가 흔들리고, **페이징 도입 시 같은 글이 두 페이지에 나오거나 누락**(중복/유실)된다.
+**해결**: 항상 유니크한 컬럼(`id`)을 정렬 맨 끝에 둬서 순서를 **결정적(deterministic)** 으로 만든다. 이게 stable sort 의 tiebreaker.
+
+### 발표 / Q&A 한 줄
+> "목록 쿼리가 `user_id` 등호 + `post_date` 정렬이라 `(user_id, post_date)` 복합 인덱스를 권장합니다 — 등호 컬럼을 앞에 둬야 정렬까지 인덱스로 처리됩니다. 그리고 같은 날짜가 여러 건일 때 순서가 흔들려 페이징이 깨지는 걸 막으려고 유니크한 `id` 를 정렬 마지막 tiebreaker 로 넣었습니다."
+
+### 코드 위치
+- `src/main/java/hoseo/moodiary/repository/PostSearchRepository.java` — 복합 인덱스 권장 주석(25~27번) + `orderSpecifiers()` tiebreaker(74~92번)
+- `src/main/java/hoseo/moodiary/repository/CalendarRepository.java` — `post(user_id, created_at)` 권장 + 기간 범위 쿼리
+
+### 관련 노트
+- [8번. ddl-auto 의 한계](#8-ddl-auto-update-의-한계--운영-머지-후-unique-인덱스-사후-검증이-필요한-이유) — 인덱스가 자동 생성 안 되니 이 복합 인덱스도 수동 DDL 대상.
+- [20번. N+1](#20-n1-문제와-fetchtypelazy--그리고-fk-만-읽어-소유권-검사를-공짜로-만드는-트릭) — "쿼리 수 줄이기" 와 "쿼리당 비용(인덱스)" 은 별개의 최적화 축.
+
+---
+
+## 22. UUID PK vs Auto-increment — ID 추측 방지의 대가는 인덱스 단편화
+
+### 한 줄 요약
+> 우리는 모든 엔티티 PK 를 `1,2,3` 자동증가가 아니라 **UUID**(`@UuidGenerator`)로 쓴다. 장점은 분산 환경 충돌 없음·ID 로 레코드 수/순서 추측 불가(보안). 대가는 16바이트라 인덱스가 크고, **랜덤 UUID 는 B-Tree 에 무작위로 삽입돼 페이지 분할(page split)·단편화로 INSERT 성능이 나빠진다**.
+
+### 왜 Auto-increment 가 아니라 UUID 인가
+
+| | Auto-increment (`1,2,3`) | UUID |
+|---|---|---|
+| 생성 주체 | DB (INSERT 시 채번) | 앱/Hibernate (INSERT 전 생성 가능) |
+| 분산/병합 | 여러 DB 합칠 때 충돌 | 충돌 사실상 0 |
+| 추측 가능성 | `/post/124` → 총 글 수·남의 글 ID 추측 | 추측 불가 (보안) |
+| 크기 | 8바이트(BIGINT) | **16바이트** — 인덱스·FK 가 다 커짐 |
+
+→ Moodiary 가 UUID 를 택한 이유는 주로 **ID 추측 방지(보안)** + 컨벤션 일관성. URL 에 `post_id` 가 노출돼도 다른 글을 못 찍는다.
+
+### UUID 의 진짜 단점 — 인덱스 단편화 (면접 가점 포인트)
+랜덤 UUID(v4)는 값이 무작위라 PK 인덱스(B-Tree)에 **아무 위치에나** 꽂힌다:
+- 새 행이 인덱스 중간중간에 삽입 → 페이지가 꽉 차면 **page split**(쪼개기) 발생 → 디스크 단편화·캐시 효율 저하 → INSERT 성능 악화.
+- Auto-increment 는 항상 **맨 뒤에만** append 돼서 이 문제가 없다.
+- 그래서 **정렬 가능한(시간순) UUID** 인 **UUIDv7 / ULID** 가 등장 — 앞부분이 타임스탬프라 append-friendly 하면서 UUID 의 장점도 유지.
+
+### 발표 / Q&A 한 줄
+> "PK 를 UUID 로 둔 건 URL 로 남의 글 ID 나 전체 글 수를 추측하지 못하게 하려는 보안 목적이 큽니다. 단점은 16바이트라 인덱스가 크고, 랜덤 UUID 라 B-Tree 에 무작위 삽입돼 페이지 분할로 INSERT 성능이 떨어진다는 점이고, 규모가 커지면 시간순 정렬이 되는 UUIDv7/ULID 로 완화할 수 있습니다."
+
+### 코드 위치
+- 모든 엔티티 — `@Id @UuidGenerator UUID id` (`Post`, `User`, `AiResponse`, `RefreshToken`)
+- 컬럼명 규칙 `<table>_id` (`post_id`, `ai_response_id` …)
+
+### 관련 노트
+- [21번. 조회 성능](#21-조회-성능--복합-인덱스-컬럼-순서--안정-정렬tiebreaker) — UUID 가 큰 만큼 복합 인덱스/FK 의 바이트 비용도 함께 커진다.
+
+---
+
+## 23. JPA 연관관계 매핑 — 1:1 단방향 + `@Enumerated(STRING)` 의 함정
+
+### 한 줄 요약
+> `AiResponse` 는 `Post` 와 **단방향 1:1** 이고 `post_id` 에 UNIQUE 를 걸어 "한 글당 한 응답" 을 DB 차원에서 보장한다. 상태 컬럼은 `@Enumerated(EnumType.STRING)` — **`ORDINAL`(정수 저장)을 쓰면 enum 순서를 바꾸는 순간 기존 데이터의 의미가 깨지는** 치명적 함정이 있어 거의 항상 STRING 을 쓴다.
+
+### 1:1 을 단방향 + UNIQUE 로 둔 설계
+`AiResponse.java`:
+
+```java
+@Table(uniqueConstraints = @UniqueConstraint(name = "uk_ai_response_post_id", columnNames = "post_id"))
+...
+@OneToOne(fetch = FetchType.LAZY, optional = false)
+@JoinColumn(name = "post_id", nullable = false)
+private Post post;   // AiResponse → Post 단방향. Post 는 AiResponse 를 모른다.
+```
+
+- **단방향**: `AiResponse` 가 `Post` 를 가리키지만 `Post` 에는 `aiResponse` 필드가 없다 → **Post 도메인이 AI 모듈을 모르게** 해서 결합을 끊었다(관심사 분리). 그래서 cascade 도 엔티티에 안 걸고 서비스에서 `deleteByPost_Id()` 로 명시 호출.
+- **1:1 정합성**: FK `post_id` 에 UNIQUE → 한 글에 AI 응답이 둘 생기는 걸 **DB 가 거부**. 앱 버그로 중복 trigger 돼도 두 번째 INSERT 가 막힌다.
+- 1:1 은 보통 **주 테이블 vs 대상 테이블 중 어디에 FK 를 둘지** 가 설계 포인트인데, 여기선 "응답이 글에 종속" 이라 `ai_response` 쪽에 FK 를 뒀다.
+
+### `@Enumerated(STRING)` vs `ORDINAL` — 면접 단골 함정
+`AiResponseStatus { PENDING, DONE, FAILED }` 를 DB 에 어떻게 저장하나:
+
+| | `ORDINAL` (기본값!) | `STRING` (우리 선택) |
+|---|---|---|
+| 저장 형태 | 정수 0,1,2 (선언 순서) | 문자열 `"PENDING"`,`"DONE"`,`"FAILED"` |
+| enum 중간에 값 추가 시 | **재앙** — `{PENDING, RETRY, DONE}` 로 바꾸면 기존 DB 의 `1`(=옛 DONE)이 이제 RETRY 로 해석됨 | 안전 — 문자열이라 순서 무관 |
+| 가독성 | DB 에서 숫자만 보임 | DB 에서 의미가 그대로 보임 |
+
+→ `@Enumerated` **기본값이 ORDINAL** 이라 무심코 빠뜨리면 위 함정에 빠진다. 그래서 **항상 `EnumType.STRING` 명시**.
+
+### 발표 / Q&A 한 줄
+> "AI 응답은 글과 1:1이라 `post_id` 에 UNIQUE 제약을 걸어 한 글에 응답이 둘 생기는 걸 DB가 막습니다. 단방향으로 둬서 Post 도메인이 AI 모듈에 의존하지 않게 했고요. 상태 enum 은 `EnumType.STRING` 으로 저장합니다 — 기본값인 ORDINAL 은 enum 순서를 바꾸면 기존 데이터 의미가 깨지기 때문입니다."
+
+### 코드 위치
+- `src/main/java/hoseo/moodiary/entitiy/AiResponse.java` — `@Table(uniqueConstraints)`, `@OneToOne(LAZY)`, `@Enumerated(STRING)`
+- `src/main/java/hoseo/moodiary/entitiy/AiResponseStatus.java` — `PENDING/DONE/FAILED`
+
+### 관련 노트
+- [8번. ddl-auto 의 한계](#8-ddl-auto-update-의-한계--운영-머지-후-unique-인덱스-사후-검증이-필요한-이유) — `uk_ai_response_post_id` UNIQUE 가 자동 생성 안 될 수 있어 운영 머지 후 `SHOW INDEX` 검증 필요.
+- [10번. Spring 비동기](#10-spring-비동기-enableasync--async--동기-블로킹-회피--db-상태머신--race-방지) — 이 `status` enum 이 큐 없는 비동기의 상태 머신 역할.
+
+---
+
 ## 🔄 누적 갱신
 
 이 문서는 **새로운 질문 / 학습이 생길 때마다 추가**된다. 본인이 모르는 걸 묻고 알게 된 모든 기술 개념을 한 곳에 누적.
@@ -1700,3 +1980,4 @@ curl -i -X OPTIONS http://localhost:8080/api/auth/login \
 | 2026-05-29 | 15번 추가 — Mixed Content (HTTPS 페이지의 HTTP API 호출을 브라우저가 *요청 전에* 차단) + FE reverse-proxy (Vercel rewrites) 패턴. FE 가 S3 대신 Vercel 배포 시도하면서 자동 HTTPS ↔ EC2 HTTP 충돌로 발견. **EC2 로그에 0줄** 이 결정적 진단 단서. plan.md 의 "프론트 = S3 only" 결정이 의존하던 가정 (S3 = HTTP) 이 Vercel 자동 HTTPS 와 충돌해 깨짐 — "결정 + 의존 가정" 명시 일반 교훈도 박음. 일반화 가능성 매우 높음 (Vercel/Netlify/Cloudflare Pages 어디서나 같은 패턴) — **13 + 14 + 15 = 3개 묶음 임계 도달, 다음 release 직후 goospel.github.io 승격 후보**. |
 | 2026-06-09 | 16번 추가 — JPA `String` 컬럼 기본 `VARCHAR(255)` 함정 + `ddl-auto:update` 가 기존 컬럼 타입을 안 바꿈. FE 의 "여러 줄 일기 저장 500" 버그 제보를 `@DataJpaTest` 로 재현해 길이 초과(줄바꿈 무관)로 확정. `TEXT` 확장 + `@Size` 두 겹 방어 + 운영 수동 ALTER. [T-036](./troubleshooting.md#t-036). 일반화 가능성 높음 (JPA/Hibernate 쓰는 모든 프로젝트의 본문성 필드 공통 함정) — **다음 묶음(16+...)으로 goospel.github.io 승격 후보**. |
 | 2026-06-11 | 17번 추가 — `403 Invalid CORS request` 의 정체 (브라우저 아닌 **서버**가 던지는 거부 + Origin **정확 문자열** 매칭 + allowlist env 외부화 함정). FE 가 Vercel 배포 후 "서버까지 도달하지만 403" 보고 → EC2 `.env` 의 `APP_CORS_ALLOWED_ORIGINS` 에 Vercel origin 추가로 해소하며 정리. #12(CORS 원리)·#15(Mixed Content)와 "서버 로그 0줄 vs 403 옴" 진단 축으로 연결. env 함정 2건(키 누락 시 `:-` default 조용히 / 쉘 `KEY=val` 은 파일 아님)도 박음. 일반화 가능성 높음 — **다음 묶음으로 goospel.github.io 승격 후보**. |
+| 2026-06-15 | **18~23번 묶음 추가 — 보안/DB 심화 6종.** 결과보고서(졸업 발표 자료) 작성 중 교수 Q&A 대비로 본인이 "ALE·TDE·TLS가 뭐냐" / "DB 공부할 거 뭐 있냐" 발화 → ① **18 암호화 계층**(전송 TLS/저장 TDE/앱 ALE, ALE만 검색 UX 트레이드오프 — #15 Mixed Content 와 cross-link), ② **19 JPA 더티 체킹**(영속성 컨텍스트·스냅샷, setter 막는 진짜 이유), ③ **20 N+1 + LAZY**(FK만 읽어 소유권 검사 공짜 트릭), ④ **21 복합 인덱스 컬럼 순서 + 안정 정렬 tiebreaker**, ⑤ **22 UUID PK vs auto-inc**(인덱스 단편화·UUIDv7), ⑥ **23 1:1 단방향 + `@Enumerated(STRING)` ORDINAL 함정**. ①은 일반화 가능성 매우 높음(모든 웹서비스 공통) — goospel.github.io 승격 1순위 후보. ②③④⑤⑥은 JPA/MySQL 스택 공통이라 묶음 승격 후보. 기존 #8·#16(ddl-auto)와 중복 회피해 새 개념만 박음. |
